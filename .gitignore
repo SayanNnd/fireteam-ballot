@@ -24,3 +24,4 @@ testing.md
 *.njsproj
 *.sln
 *.sw?
+.aider*

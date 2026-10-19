@@ -11,7 +11,7 @@ export const Header: React.FC<HeaderProps> = ({ roomCode, onLeave }) => {
       <div className="brand-badge">
         <span className="brand-mark" />
         <div>
-          <h1 className="brand-title">RAID PICKER</h1>
+          <h1 className="brand-title">FIRETEAM BALLOT</h1>
           <div className="brand-protocol">PROTOCOL // FIRETEAM POOL SELECTION</div>
         </div>
       </div>

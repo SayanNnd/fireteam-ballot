@@ -1,4 +1,4 @@
--- Raid Picker Database Schema
+-- Fireteam Ballot Database Schema
 -- Run this entire script in your Supabase SQL Editor (Dashboard -> SQL Editor -> New Query)
 
 -- 1. Create tables

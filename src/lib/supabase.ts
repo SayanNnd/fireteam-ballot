@@ -21,7 +21,7 @@ export const isSupabaseConfigured = Boolean(
 );
 
 // Supabase client configuration
-// Disable auth session persistence and locks since Raid Picker is an ephemeral anonymous app
+// Disable auth session persistence and locks since Fireteam Ballot is an ephemeral anonymous app
 export const supabase = createClient(
   isSupabaseConfigured ? supabaseUrl : 'https://placeholder.supabase.co',
   isSupabaseConfigured ? supabaseAnonKey : 'placeholder-key',

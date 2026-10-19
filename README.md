@@ -1,4 +1,4 @@
-# Raid Picker
+# Fireteam Ballot
 
 A realtime web app for Destiny 2 fireteams to resolve "which raid tonight?". Guardians join a room using a 4-letter code, vote privately, each can veto once, and the app reveals a weighted-random pick.
 
