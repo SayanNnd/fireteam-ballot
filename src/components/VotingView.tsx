@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { Room, Player } from '../types';
 import raids from '../data/raids';
+import { fetchLiveFeaturedRaidIds, getFeaturedRaidIds } from '../lib/bungie';
 
 interface VotingViewProps {
   room: Room;
@@ -37,18 +38,36 @@ export const VotingView: React.FC<VotingViewProps> = ({
 }) => {
   const isLocked = currentPlayer.has_locked;
   const draftStorageKey = `fireteam_ballot_draft_${room.id}_${currentPlayer.id}`;
+  const userPreferencesKey = 'fireteam_ballot_user_preferences';
 
-  // Local draft scores: initialize each raid with default score 3 (Neutral)
+  // Local draft scores: initialize from room draft, saved user preferences, or default 3 (MID)
   const [scores, setScores] = useState<Record<string, number>>(() => {
     try {
-      const saved = localStorage.getItem(draftStorageKey);
-      if (saved) {
-        const parsed = JSON.parse(saved);
+      const savedDraft = localStorage.getItem(draftStorageKey);
+      if (savedDraft) {
+        const parsed = JSON.parse(savedDraft);
         if (parsed.scores) return parsed.scores;
       }
     } catch {
       // ignore
     }
+
+    try {
+      const savedPrefs = localStorage.getItem(userPreferencesKey);
+      if (savedPrefs) {
+        const parsed = JSON.parse(savedPrefs);
+        if (parsed && typeof parsed === 'object') {
+          const initial: Record<string, number> = {};
+          raids.forEach((r) => {
+            initial[r.id] = parsed[r.id] !== undefined ? parsed[r.id] : 3;
+          });
+          return initial;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     const initial: Record<string, number> = {};
     raids.forEach((r) => {
       initial[r.id] = 3;
@@ -70,7 +89,7 @@ export const VotingView: React.FC<VotingViewProps> = ({
     return null;
   });
 
-  // Save drafts locally so page refresh preserves progress
+  // Save drafts locally so page refresh preserves progress, and persist user preferences
   useEffect(() => {
     if (!isLocked) {
       try {
@@ -78,11 +97,15 @@ export const VotingView: React.FC<VotingViewProps> = ({
           draftStorageKey,
           JSON.stringify({ scores, vetoRaidId })
         );
+        localStorage.setItem(
+          userPreferencesKey,
+          JSON.stringify(scores)
+        );
       } catch {
         // ignore
       }
     }
-  }, [scores, vetoRaidId, isLocked, draftStorageKey]);
+  }, [scores, vetoRaidId, isLocked, draftStorageKey, userPreferencesKey]);
 
   // Clean up draft storage once locked in
   useEffect(() => {
@@ -110,13 +133,27 @@ export const VotingView: React.FC<VotingViewProps> = ({
   const totalPlayers = players.length;
   const offlineCount = players.filter((p) => !onlinePlayerIds.has(p.id) && p.id !== currentPlayer.id).length;
 
+  const [featuredRaidIds, setFeaturedRaidIds] = useState<Set<string>>(() => getFeaturedRaidIds());
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchLiveFeaturedRaidIds().then((liveIds) => {
+      if (isMounted) {
+        setFeaturedRaidIds(new Set(liveIds));
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   return (
     <div>
       {/* Top Protocol Status Bar */}
       <div className="lobby-header-bar" style={{ marginBottom: '20px' }}>
         <div>
           <div className="label-caps" style={{ color: 'var(--gold)', marginBottom: '2px' }}>
-            [PROTOCOL // PRIVATE BALLOT DELIBERATION]
+            [FIRETEAM VOTING]
           </div>
           <div style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', fontWeight: 700 }}>
             FIRETEAM [{room.code}] // VOTING ACTIVE
@@ -144,6 +181,7 @@ export const VotingView: React.FC<VotingViewProps> = ({
           {raids.map((raid) => {
             const isVetoed = vetoRaidId === raid.id;
             const currentScore = scores[raid.id] ?? 3;
+            const isFeatured = featuredRaidIds.has(raid.id);
 
             return (
               <div
@@ -161,10 +199,26 @@ export const VotingView: React.FC<VotingViewProps> = ({
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                   <div>
-                    <h3 style={{ fontSize: '1.15rem', color: isVetoed ? 'var(--gold)' : 'var(--text-main)' }}>
-                      {raid.name}
-                    </h3>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <h3 style={{ fontSize: '1.15rem', color: isVetoed ? 'var(--gold)' : 'var(--text-main)', margin: 0 }}>
+                        {raid.name}
+                      </h3>
+                      {isFeatured && (
+                        <span
+                          className="tag"
+                          style={{
+                            fontSize: '0.65rem',
+                            padding: '1px 6px',
+                            borderColor: 'var(--gold)',
+                            color: 'var(--gold)',
+                            letterSpacing: '0.04em',
+                          }}
+                        >
+                          FEATURED
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                       {raid.tagline}
                     </div>
                   </div>
@@ -191,7 +245,7 @@ export const VotingView: React.FC<VotingViewProps> = ({
                 {/* Score Selector (1-5) */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px' }}>
                   <span className="label-caps" style={{ fontSize: '0.68rem', color: isVetoed ? 'var(--gold)' : 'var(--text-muted)' }}>
-                    {isVetoed ? '[EXCLUDED BY VETO]' : `WEIGHT: ${SCORE_LABELS[currentScore]} (${currentScore}/5)`}
+                    {isVetoed ? '[EXCLUDED BY VETO]' : `PRIORITY: ${SCORE_LABELS[currentScore]} (${currentScore}/5)`}
                   </span>
 
                   <div style={{ display: 'flex', gap: '4px' }}>

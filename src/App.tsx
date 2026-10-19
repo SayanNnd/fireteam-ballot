@@ -9,6 +9,7 @@ import { LandingView } from './components/LandingView';
 import { LobbyView } from './components/LobbyView';
 import { VotingView } from './components/VotingView';
 import { RevealedView } from './components/RevealedView';
+import { fetchLiveFeaturedRaidIds } from './lib/bungie';
 
 const STORAGE_KEY = 'fireteam_ballot_session';
 
@@ -50,6 +51,11 @@ export function App() {
     currentPlayerRef.current = currentPlayer;
     roomRef.current = room;
   }, [currentPlayer, room]);
+
+  // Eagerly prefetch active featured raids from Bungie API
+  useEffect(() => {
+    fetchLiveFeaturedRaidIds();
+  }, []);
 
   // Fetch all players currently in the room
   const fetchRoomPlayers = useCallback(async (roomId: string) => {
@@ -270,6 +276,12 @@ export function App() {
       // 3. FAST BROADCAST: Instant ballot lock indicator update
       .on('broadcast', { event: 'player_locked' }, () => {
         fetchRoomPlayers(roomId);
+      })
+      // 3b. FAST BROADCAST: Instant picked raid determination
+      .on('broadcast', { event: 'pick_determined' }, ({ payload }) => {
+        if (payload?.pickedRaidId) {
+          setRoom((prev) => (prev ? { ...prev, picked_raid_id: payload.pickedRaidId } : null));
+        }
       })
       // 4. FAST BROADCAST: Instant kick detection
       .on('broadcast', { event: 'player_kicked' }, ({ payload }) => {
@@ -726,7 +738,7 @@ export function App() {
     if (!room || !currentPlayer?.is_host) return;
 
     // 1. Optimistic instant local update
-    setRoom((prev) => (prev ? { ...prev, status: 'voting' } : null));
+    setRoom((prev) => (prev ? { ...prev, status: 'voting', picked_raid_id: null } : null));
     setCurrentPlayer((prev) => (prev ? { ...prev, has_locked: false, veto_used: false } : null));
     setPlayers((prev) => prev.map((p) => ({ ...p, has_locked: false, veto_used: false })));
 
@@ -744,7 +756,7 @@ export function App() {
     // 3. Persist to database in background
     try {
       await Promise.all([
-        supabase.from('rooms').update({ status: 'voting' }).eq('id', room.id),
+        supabase.from('rooms').update({ status: 'voting', picked_raid_id: null }).eq('id', room.id),
         supabase.from('players').update({ has_locked: false, veto_used: false }).eq('room_id', room.id),
         supabase.from('votes').delete().eq('room_id', room.id),
         supabase.from('vetoes').delete().eq('room_id', room.id),
@@ -759,7 +771,7 @@ export function App() {
     if (!room) return;
 
     // 1. Optimistic instant local update
-    setRoom((prev) => (prev ? { ...prev, status: 'lobby' } : null));
+    setRoom((prev) => (prev ? { ...prev, status: 'lobby', picked_raid_id: null } : null));
     setCurrentPlayer((prev) => (prev ? { ...prev, has_locked: false, veto_used: false } : null));
     setPlayers((prev) => prev.map((p) => ({ ...p, has_locked: false, veto_used: false })));
 
@@ -777,7 +789,7 @@ export function App() {
     // 3. Persist to database
     try {
       await Promise.all([
-        supabase.from('rooms').update({ status: 'lobby' }).eq('id', room.id),
+        supabase.from('rooms').update({ status: 'lobby', picked_raid_id: null }).eq('id', room.id),
         supabase.from('players').update({ has_locked: false, veto_used: false }).eq('room_id', room.id),
         supabase.from('votes').delete().eq('room_id', room.id),
         supabase.from('vetoes').delete().eq('room_id', room.id),
@@ -990,10 +1002,10 @@ export function App() {
         supabase.from('players').update({ has_locked: false, veto_used: false }).eq('room_id', room.id),
         supabase.from('votes').delete().eq('room_id', room.id),
         supabase.from('vetoes').delete().eq('room_id', room.id),
-        supabase.from('rooms').update({ status: 'voting' }).eq('id', room.id),
+        supabase.from('rooms').update({ status: 'voting', picked_raid_id: null }).eq('id', room.id),
       ]);
 
-      setRoom((prev) => (prev ? { ...prev, status: 'voting' } : null));
+      setRoom((prev) => (prev ? { ...prev, status: 'voting', picked_raid_id: null } : null));
       setCurrentPlayer((prev) => (prev ? { ...prev, has_locked: false, veto_used: false } : null));
       setPlayers((prev) => prev.map((p) => ({ ...p, has_locked: false, veto_used: false })));
 
@@ -1012,6 +1024,16 @@ export function App() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Action: Handle authoritative pick determined
+  const handlePickDetermined = (pickedRaidId: string) => {
+    setRoom((prev) => (prev ? { ...prev, picked_raid_id: pickedRaidId } : null));
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'pick_determined',
+      payload: { pickedRaidId },
+    });
   };
 
   // Action: Leave Room
@@ -1085,7 +1107,7 @@ export function App() {
             </div>
             <h2 style={{ fontSize: '1.35rem', marginBottom: '8px' }}>RECONNECTING SESSION</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-              Syncing tactical telemetry with fireteam roster...
+              Reconnecting to fireteam session...
             </p>
           </div>
         ) : !room || !currentPlayer ? (
@@ -1128,6 +1150,7 @@ export function App() {
             onResetToVoting={handleResetToVoting}
             onReturnToLobby={handleReturnToLobby}
             onDisbandRoom={handleDisbandRoom}
+            onPickDetermined={handlePickDetermined}
             isLoading={isLoading}
           />
         )}

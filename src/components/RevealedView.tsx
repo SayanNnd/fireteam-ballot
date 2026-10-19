@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import type { Room, Player } from '../types';
 import { supabase } from '../lib/supabase';
 import raids from '../data/raids';
+import { pickRaid, calculateRaidWeights, type VoteInput, type VetoInput, type HistoryInput } from '../lib/pick';
 
 interface RevealedViewProps {
   room: Room;
@@ -11,8 +12,12 @@ interface RevealedViewProps {
   onResetToVoting: () => Promise<void>;
   onReturnToLobby: () => Promise<void>;
   onDisbandRoom?: () => Promise<void>;
+  onPickDetermined?: (pickedRaidId: string) => void;
+  onReroll?: () => Promise<void>;
   isLoading: boolean;
 }
+
+const getIsoTimestamp = () => new Date().toISOString();
 
 export const RevealedView: React.FC<RevealedViewProps> = ({
   room,
@@ -22,176 +27,467 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
   onResetToVoting,
   onReturnToLobby,
   onDisbandRoom,
+  onPickDetermined,
+  onReroll,
   isLoading,
 }) => {
   const [vetoes, setVetoes] = useState<{ player_id: string; raid_id: string }[]>([]);
-  const [votesCount, setVotesCount] = useState<number>(0);
+  const [votes, setVotes] = useState<{ player_id: string; raid_id: string; score: number }[]>([]);
+  const [history, setHistory] = useState<{ raid_id: string; picked_at: string }[]>([]);
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
+  const [isPicking, setIsPicking] = useState(false);
+  const hasExecutedPick = useRef(false);
 
-  // Now that all players have locked in, votes and vetoes can be securely queried!
+  // 1. Fetch all votes, vetoes, and room history from Supabase
   useEffect(() => {
-    async function loadResults() {
+    let isMounted = true;
+
+    async function loadData() {
       try {
-        const [vetoesRes, votesRes] = await Promise.all([
+        const [vetoesRes, votesRes, historyRes] = await Promise.all([
           supabase.from('vetoes').select('player_id, raid_id').eq('room_id', room.id),
-          supabase.from('votes').select('id', { count: 'exact' }).eq('room_id', room.id),
+          supabase.from('votes').select('player_id, raid_id, score').eq('room_id', room.id),
+          supabase
+            .from('history')
+            .select('raid_id, picked_at')
+            .eq('room_id', room.id)
+            .order('picked_at', { ascending: false }),
         ]);
 
+        if (!isMounted) return;
+
         if (vetoesRes.data) setVetoes(vetoesRes.data);
-        if (votesRes.count !== null) setVotesCount(votesRes.count);
+        if (votesRes.data) setVotes(votesRes.data);
+        if (historyRes.data) {
+          // Filter out internal system heartbeat records
+          const realHistory = historyRes.data.filter((h) => !h.raid_id.startsWith('__'));
+          setHistory(realHistory);
+        }
+        setIsDataLoaded(true);
       } catch (err) {
-        console.error('Error loading revealed results:', err);
+        console.error('Error loading ballot outcomes:', err);
+        if (isMounted) setIsDataLoaded(true);
       }
     }
 
-    loadResults();
+    loadData();
+    return () => {
+      isMounted = false;
+    };
   }, [room.id]);
 
-  const vetoedRaidIds = new Set(vetoes.map((v) => v.raid_id));
+  // 2. Authoritative Pick Selection: Host executes pick, or oldest online player if host is offline
+  useEffect(() => {
+    if (!isDataLoaded || room.picked_raid_id || hasExecutedPick.current) return;
+
+    const voteInputs: VoteInput[] = votes.map((v) => ({ raid_id: v.raid_id, score: v.score }));
+    const vetoInputs: VetoInput[] = vetoes.map((v) => ({ raid_id: v.raid_id }));
+    const historyInputs: HistoryInput[] = history.map((h) => ({ raid_id: h.raid_id, picked_at: h.picked_at }));
+
+    // Check if current player is designated authority to write the pick
+    const isHost = currentPlayer.is_host;
+    const isHostOnline = onlinePlayerIds.has(room.host_player_id || '');
+    const onlineRemaining = players.filter((p) => onlinePlayerIds.has(p.id) || p.id === currentPlayer.id);
+    const isOldestOnline = onlineRemaining.length > 0 && onlineRemaining[0].id === currentPlayer.id;
+
+    const shouldExecutePick = isHost || (!isHostOnline && isOldestOnline);
+
+    if (shouldExecutePick) {
+      hasExecutedPick.current = true;
+      const result = pickRaid(raids, voteInputs, vetoInputs, historyInputs);
+      const chosenId = result.pickedRaid?.id || '__EMPTY_POOL__';
+
+      (async () => {
+        setIsPicking(true);
+        try {
+          const { error: updateErr } = await supabase
+            .from('rooms')
+            .update({ picked_raid_id: chosenId })
+            .eq('id', room.id)
+            .is('picked_raid_id', null);
+
+          if (!updateErr && result.pickedRaid) {
+            const pickedAt = getIsoTimestamp();
+            await supabase.from('history').insert({
+              room_id: room.id,
+              raid_id: result.pickedRaid.id,
+              picked_at: pickedAt,
+            });
+
+            setHistory((prev) => [{ raid_id: result.pickedRaid!.id, picked_at: pickedAt }, ...prev]);
+
+            if (onPickDetermined) {
+              onPickDetermined(chosenId);
+            }
+          }
+        } catch (err) {
+          console.error('Failed to write authoritative pick:', err);
+        } finally {
+          setIsPicking(false);
+        }
+      })();
+    }
+  }, [
+    isDataLoaded,
+    room.id,
+    room.picked_raid_id,
+    room.host_player_id,
+    votes,
+    vetoes,
+    history,
+    currentPlayer.is_host,
+    currentPlayer.id,
+    onlinePlayerIds,
+    players,
+    onPickDetermined,
+  ]);
+
+  // 3. Compute probability distribution weights for display
+  const voteInputs: VoteInput[] = votes.map((v) => ({ raid_id: v.raid_id, score: v.score }));
+  const vetoInputs: VetoInput[] = vetoes.map((v) => ({ raid_id: v.raid_id }));
+  const historyInputs: HistoryInput[] = history.map((h) => ({ raid_id: h.raid_id, picked_at: h.picked_at }));
+
+  const { eligibleRaids, weights, vetoedRaidIds } = calculateRaidWeights(
+    raids,
+    voteInputs,
+    vetoInputs,
+    historyInputs
+  );
+
+  const totalWeight = Object.values(weights).reduce((sum, w) => sum + w, 0);
+
+  // Map picked raid from ID
+  const pickedRaidId = room.picked_raid_id;
+  const isPoolEmpty = pickedRaidId === '__EMPTY_POOL__' || (isDataLoaded && eligibleRaids.length === 0);
+  const pickedRaid = raids.find((r) => r.id === pickedRaidId) || null;
+
+  const pickedWeight = pickedRaid ? weights[pickedRaid.id] || 0 : 0;
+  const pickedPercentage = totalWeight > 0 ? ((pickedWeight / totalWeight) * 100).toFixed(1) : '0';
+
+  // Recency penalty only applies to the 2 most recent picks; on the 3rd roll/revote, it drops to 0!
+  const isRecentHistoryRaid = (raidId: string): boolean => {
+    return history.slice(0, 2).some((h) => h.raid_id.toLowerCase() === raidId.toLowerCase());
+  };
+
+  // Action: Reroll Target
+  const handleReroll = async () => {
+    if (isPicking || isLoading || !currentPlayer.is_host) return;
+
+    if (onReroll) {
+      await onReroll();
+      return;
+    }
+
+    setIsPicking(true);
+    try {
+      const result = pickRaid(raids, voteInputs, vetoInputs, historyInputs);
+      const chosenId = result.pickedRaid?.id || '__EMPTY_POOL__';
+
+      await supabase
+        .from('rooms')
+        .update({ picked_raid_id: chosenId })
+        .eq('id', room.id);
+
+      if (result.pickedRaid) {
+        const pickedAt = getIsoTimestamp();
+        await supabase.from('history').insert({
+          room_id: room.id,
+          raid_id: result.pickedRaid.id,
+          picked_at: pickedAt,
+        });
+
+        setHistory((prev) => [{ raid_id: result.pickedRaid!.id, picked_at: pickedAt }, ...prev]);
+      }
+
+      if (onPickDetermined) {
+        onPickDetermined(chosenId);
+      }
+    } catch (err) {
+      console.error('Failed to reroll target:', err);
+    } finally {
+      setIsPicking(false);
+    }
+  };
 
   return (
     <div>
-      <div className="lobby-header-bar" style={{ marginBottom: '24px' }}>
-        <div>
-          <div className="label-caps" style={{ color: 'var(--gold)', marginBottom: '2px' }}>
-            [STAGE: BALLOTS SEALED // REVEAL COMPLETE]
+      {/* Hero Selected Raid Card */}
+      {isPoolEmpty ? (
+        <div
+          className="panel-card"
+          style={{
+            borderColor: 'var(--border-strong)',
+            padding: '24px',
+            marginBottom: '20px',
+            backgroundColor: 'var(--bg-panel)',
+          }}
+        >
+          <div className="label-caps" style={{ color: 'var(--gold)', marginBottom: '8px' }}>
+            [CRITICAL // ALL DESTINATIONS VETOED]
           </div>
-          <div style={{ fontFamily: 'var(--font-display)', fontSize: '1.4rem', fontWeight: 800 }}>
-            FIRETEAM [{room.code}] // ALL GUARDIANS LOCKED IN
-          </div>
-        </div>
-
-        <div className="tag tag-gold" style={{ padding: '6px 14px', fontSize: '0.85rem' }}>
-          PHASE 2 COMPLETE
-        </div>
-      </div>
-
-      <div className="landing-grid" style={{ gridTemplateColumns: '1.2fr 0.8fr', gap: '20px' }}>
-        {/* Left: Summary of Vetoes and Candidates */}
-        <div className="panel-card" style={{ borderColor: 'var(--gold)' }}>
-          <div className="panel-header">
-            <div>
-              <div className="label-caps">[BALLOT SUMMARY]</div>
-              <h2>FIRETEAM VOTING OUTCOME</h2>
-            </div>
-            <span className="label-caps" style={{ color: 'var(--gold)' }}>
-              {votesCount} TOTAL VOTES
-            </span>
-          </div>
-
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '16px' }}>
-            All {players.length} Guardians submitted and locked their ballots.
-            {vetoes.length > 0
-              ? ` ${vetoes.length} raid destination(s) were vetoed and removed from selection.`
-              : ' No vetoes were cast.'}
+          <h2 style={{ fontSize: '1.6rem', marginBottom: '8px', color: 'var(--text-main)' }}>
+            NO VALID RAID DESTINATIONS REMAIN
+          </h2>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>
+            All available raids were vetoed by fireteam members. Use the leader controls on the right to reset ballots and revote.
           </p>
-
-          <div className="label-caps" style={{ marginBottom: '8px' }}>
-            VETO STATUS ({vetoes.length} VETOED)
+        </div>
+      ) : pickedRaid ? (
+        <div
+          className="panel-card"
+          style={{
+            borderColor: 'var(--gold)',
+            padding: '24px 28px',
+            marginBottom: '20px',
+            backgroundColor: 'var(--bg-panel)',
+          }}
+        >
+          <div className="label-caps" style={{ color: 'var(--gold)', marginBottom: '8px' }}>
+            [DEPLOYMENT TARGET]
           </div>
-
-          {vetoes.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '20px' }}>
-              {vetoes.map((v, i) => {
-                const raid = raids.find((r) => r.id === v.raid_id);
-                const player = players.find((p) => p.id === v.player_id);
-                return (
-                  <div
-                    key={i}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      padding: '8px 12px',
-                      backgroundColor: 'var(--bg-input)',
-                      border: 'var(--border-width) solid var(--gold-border)',
-                      borderRadius: 'var(--radius)',
-                      fontSize: '0.9rem',
-                    }}
-                  >
-                    <span style={{ color: 'var(--gold)', fontWeight: 600 }}>
-                      [VETOED]: {raid?.name || v.raid_id}
-                    </span>
-                    <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                      by {player?.name || 'Guardian'}
-                    </span>
-                  </div>
-                );
-              })}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              flexWrap: 'wrap',
+              gap: '16px',
+            }}
+          >
+            <div>
+              <h1
+                style={{
+                  fontFamily: 'var(--font-display)',
+                  fontSize: '2.5rem',
+                  fontWeight: 800,
+                  color: 'var(--gold)',
+                  lineHeight: 1.1,
+                  letterSpacing: '0.03em',
+                  marginBottom: '8px',
+                }}
+              >
+                {pickedRaid.name}
+              </h1>
+              <p
+                style={{
+                  color: 'var(--text-main)',
+                  fontSize: '1.05rem',
+                  maxWidth: '680px',
+                  lineHeight: '1.4',
+                }}
+              >
+                {pickedRaid.tagline}
+              </p>
             </div>
-          ) : (
-            <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '20px' }}>
-              No vetoes used. All {raids.length} destinations remain eligible.
-            </div>
-          )}
 
-          <div className="label-caps" style={{ marginBottom: '8px' }}>
-            ELIGIBLE POOL FOR WEIGHTED PICK ({raids.length - vetoedRaidIds.size} RAIDS)
-          </div>
-          <div className="pool-list">
-            {raids
-              .filter((r) => !vetoedRaidIds.has(r.id))
-              .map((r) => (
-                <span key={r.id} className="pool-pill" style={{ color: 'var(--text-main)', borderColor: 'var(--border-strong)' }}>
-                  {r.name}
-                </span>
-              ))}
+            <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
+              <div
+                className="tag tag-gold"
+                style={{
+                  fontSize: '0.95rem',
+                  padding: '8px 16px',
+                  fontFamily: 'var(--font-condensed)',
+                  letterSpacing: '0.06em',
+                }}
+              >
+                {pickedPercentage}% CHANCE
+              </div>
+              {isRecentHistoryRaid(pickedRaid.id) && (
+                <div
+                  style={{
+                    fontSize: '0.72rem',
+                    color: 'var(--text-subtle)',
+                    fontFamily: 'var(--font-condensed)',
+                  }}
+                >
+                  [RECENT RUN]
+                </div>
+              )}
+              {currentPlayer.is_host && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  onClick={handleReroll}
+                  disabled={isPicking || isLoading}
+                  style={{ marginTop: '4px' }}
+                >
+                  {isPicking ? 'ROLLING...' : 'REROLL'}
+                </button>
+              )}
+            </div>
           </div>
         </div>
+      ) : (
+        <div
+          className="panel-card"
+          style={{
+            borderColor: 'var(--gold-border)',
+            padding: '24px',
+            marginBottom: '20px',
+            textAlign: 'center',
+          }}
+        >
+          <div className="label-caps" style={{ color: 'var(--gold)', marginBottom: '6px' }}>
+            [SELECTING TARGET...]
+          </div>
+          <h2 style={{ fontSize: '1.3rem' }}>
+            {isPicking ? 'SELECTING RAID...' : 'SYNCHRONIZING TARGET...'}
+          </h2>
+        </div>
+      )}
 
-        {/* Right: Roster & Controls */}
+      {/* Main Grid: Standings + Leader Controls */}
+      <div className="landing-grid" style={{ gridTemplateColumns: '1.4fr 0.6fr', gap: '20px' }}>
+        {/* Left Column: Destination Standings */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div className="panel-card">
             <div className="panel-header">
-              <div className="label-caps">LOCKED ROSTER</div>
+              <div>
+                <div className="label-caps">[VOTE TOTALS]</div>
+                <h2>DESTINATION STANDINGS</h2>
+              </div>
               <span className="label-caps" style={{ color: 'var(--gold)' }}>
-                {players.length}/{players.length} LOCKED
+                {votes.length} VOTES RECORDED
               </span>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {players.map((p) => {
-                const isSelf = p.id === currentPlayer.id;
-                const isOnline = onlinePlayerIds.has(p.id) || isSelf;
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {/* Header row */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '2fr 0.8fr 1fr',
+                  padding: '6px 12px',
+                  fontSize: '0.72rem',
+                  color: 'var(--text-subtle)',
+                  fontFamily: 'var(--font-condensed)',
+                  letterSpacing: '0.08em',
+                  borderBottom: 'var(--border-width) solid var(--border)',
+                }}
+              >
+                <span>DESTINATION</span>
+                <span style={{ textAlign: 'center' }}>VOTES</span>
+                <span style={{ textAlign: 'right' }}>CHANCE</span>
+              </div>
+
+              {/* Eligible Raids */}
+              {eligibleRaids.map((r) => {
+                const raidVotes = votes.filter((v) => v.raid_id.toLowerCase() === r.id.toLowerCase());
+                const voteTotal = raidVotes.reduce((sum, v) => sum + (v.score || 0), 0);
+                const weight = weights[r.id] || 0;
+                const pct = totalWeight > 0 ? ((weight / totalWeight) * 100).toFixed(1) : '0';
+                const isSelected = pickedRaid?.id === r.id;
 
                 return (
                   <div
-                    key={p.id}
+                    key={r.id}
                     style={{
-                      display: 'flex',
+                      display: 'grid',
+                      gridTemplateColumns: '2fr 0.8fr 1fr',
                       alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '8px 12px',
-                      backgroundColor: 'var(--bg-input)',
-                      border: 'var(--border-width) solid var(--border)',
+                      padding: '10px 12px',
+                      backgroundColor: isSelected ? 'var(--bg-panel)' : 'var(--bg-input)',
+                      border: 'var(--border-width) solid',
+                      borderColor: isSelected ? 'var(--gold)' : 'var(--border)',
                       borderRadius: 'var(--radius)',
-                      opacity: isOnline ? 1 : 0.75,
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontFamily: 'var(--font-condensed)', fontWeight: 600 }}>
-                        {p.name} {isSelf && '(YOU)'}
-                      </span>
-                      {!isOnline && (
-                        <span style={{ fontSize: '0.74rem', color: 'var(--text-subtle)', fontStyle: 'italic' }}>
-                          (Disconnected)
-                        </span>
-                      )}
+                    <div>
+                      <div
+                        style={{
+                          fontFamily: 'var(--font-condensed)',
+                          fontWeight: 700,
+                          fontSize: '0.95rem',
+                          color: isSelected ? 'var(--gold)' : 'var(--text-main)',
+                        }}
+                      >
+                        {r.name}
+                      </div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      {!isOnline && (
-                        <span className="tag" style={{ borderColor: 'var(--border-strong)', color: 'var(--text-subtle)' }}>
-                          [OFFLINE]
-                        </span>
-                      )}
-                      <span className="tag tag-gold">[LOCKED IN]</span>
+
+                    <div
+                      style={{
+                        textAlign: 'center',
+                        fontFamily: 'var(--font-condensed)',
+                        fontWeight: 600,
+                        fontSize: '0.9rem',
+                        color: 'var(--text-muted)',
+                      }}
+                    >
+                      {voteTotal}
+                    </div>
+
+                    <div style={{ textAlign: 'right' }}>
+                      <span
+                        className="tag"
+                        style={{
+                          borderColor: isSelected ? 'var(--gold)' : 'var(--border)',
+                          color: isSelected ? 'var(--gold)' : 'var(--text-muted)',
+                          fontSize: '0.8rem',
+                        }}
+                      >
+                        {pct}%
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Vetoed Raids */}
+              {vetoedRaidIds.map((vId) => {
+                const raid = raids.find((r) => r.id.toLowerCase() === vId.toLowerCase());
+                const vetoCast = vetoes.find((v) => v.raid_id.toLowerCase() === vId.toLowerCase());
+                const player = players.find((p) => p.id === vetoCast?.player_id);
+
+                return (
+                  <div
+                    key={vId}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '2fr 0.8fr 1fr',
+                      alignItems: 'center',
+                      padding: '8px 12px',
+                      backgroundColor: 'var(--bg-deep)',
+                      border: 'var(--border-width) solid var(--border)',
+                      borderRadius: 'var(--radius)',
+                      opacity: 0.65,
+                    }}
+                  >
+                    <div>
+                      <div
+                        style={{
+                          fontFamily: 'var(--font-condensed)',
+                          fontWeight: 600,
+                          fontSize: '0.9rem',
+                          color: 'var(--text-subtle)',
+                        }}
+                      >
+                        {raid?.name || vId}
+                      </div>
+                      <div style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>
+                        Vetoed by {player?.name || 'Guardian'}
+                      </div>
+                    </div>
+
+                    <div style={{ textAlign: 'center', color: 'var(--text-subtle)', fontSize: '0.85rem' }}>
+                      —
+                    </div>
+
+                    <div style={{ textAlign: 'right' }}>
+                      <span className="tag" style={{ borderColor: 'var(--border-strong)', color: 'var(--text-subtle)' }}>
+                        [VETOED]
+                      </span>
                     </div>
                   </div>
                 );
               })}
             </div>
           </div>
+        </div>
 
-          {/* Leader Controls */}
-          {currentPlayer.is_host && (
+        {/* Right Column: Controls */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {currentPlayer.is_host ? (
             <div className="panel-card" style={{ borderColor: 'var(--border-strong)' }}>
               <div className="label-caps" style={{ marginBottom: '8px' }}>FIRETEAM LEADER CONTROLS</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -199,17 +495,26 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
                   type="button"
                   className="btn btn-primary"
                   style={{ width: '100%' }}
-                  onClick={onResetToVoting}
-                  disabled={isLoading}
+                  onClick={handleReroll}
+                  disabled={isPicking || isLoading}
                 >
-                  REVOTE (TEST PHASE 2 AGAIN)
+                  {isPicking ? 'ROLLING TARGET...' : 'REROLL TARGET'}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ width: '100%' }}
+                  onClick={onResetToVoting}
+                  disabled={isLoading || isPicking}
+                >
+                  REVOTE (RESET BALLOTS)
                 </button>
                 <button
                   type="button"
                   className="btn btn-sm"
                   style={{ width: '100%' }}
                   onClick={onReturnToLobby}
-                  disabled={isLoading}
+                  disabled={isLoading || isPicking}
                 >
                   RETURN TO LOBBY
                 </button>
@@ -224,7 +529,7 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
                       marginTop: '4px',
                     }}
                     onClick={onDisbandRoom}
-                    disabled={isLoading}
+                    disabled={isLoading || isPicking}
                     title="Immediately kill and delete this room from the database"
                   >
                     KILL ROOM (DISBAND)
@@ -232,9 +537,18 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
                 )}
               </div>
             </div>
+          ) : (
+            <div className="panel-card" style={{ borderColor: 'var(--border)' }}>
+              <div className="label-caps" style={{ marginBottom: '8px' }}>FIRETEAM STATUS</div>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem', lineHeight: '1.4' }}>
+                Target assigned. Awaiting orders from Fireteam Leader.
+              </p>
+            </div>
           )}
         </div>
       </div>
     </div>
   );
 };
+
+export default RevealedView;
