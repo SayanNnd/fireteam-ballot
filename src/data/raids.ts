@@ -1,8 +1,13 @@
 // Active Destiny 2 Raids
 // Editable raid pool. Each entry must have { id, name, tagline }
-// Flagged/Vaulted raids are listed at the bottom for review.
 
-export const raids = [
+export interface Raid {
+  id: string;
+  name: string;
+  tagline: string;
+}
+
+export const raids: Raid[] = [
   {
     id: "salvations-edge",
     name: "Salvation's Edge",
@@ -49,17 +54,5 @@ export const raids = [
     tagline: "Slay the legendary Ahamkara dragon Riven inside the Dreaming City."
   }
 ];
-
-// FLAG FOR USER REVIEW (Legacy / Vaulted Raids not in current active rotation):
-// If your fireteam plays private/legacy content or future unvaults, uncomment these:
-/*
-export const legacyRaids = [
-  { id: "leviathan", name: "Leviathan", tagline: "Calus invites Guardians to test their strength aboard the world-eater." },
-  { id: "eater-of-worlds", name: "Eater of Worlds", tagline: "Descend into the Leviathan's belly to clear the engine blockage." },
-  { id: "spire-of-stars", name: "Spire of Stars", tagline: "Defend the celestial spire against Val Ca'uor." },
-  { id: "scourge-of-the-past", name: "Scourge of the Past", tagline: "Prevent the Fallen from pillaging Black Armory secrets in the Last City ruins." },
-  { id: "crown-of-sorrow", name: "Crown of Sorrow", tagline: "Cleanse Gahlran of the Hive hive-mind artifact." }
-];
-*/
 
 export default raids;

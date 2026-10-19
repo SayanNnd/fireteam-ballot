@@ -42,3 +42,5 @@ export interface HistoryItem {
   raid_id: string;
   picked_at: string;
 }
+
+export type { Raid } from './data/raids';

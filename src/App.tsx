@@ -7,6 +7,8 @@ import { Header } from './components/Header';
 import { SetupBanner } from './components/SetupBanner';
 import { LandingView } from './components/LandingView';
 import { LobbyView } from './components/LobbyView';
+import { VotingView } from './components/VotingView';
+import { RevealedView } from './components/RevealedView';
 
 const STORAGE_KEY = 'fireteam_ballot_session';
 
@@ -37,6 +39,7 @@ export function App() {
     () => Boolean(isSupabaseConfigured && localStorage.getItem(STORAGE_KEY))
   );
   const [error, setError] = useState<string | null>(null);
+  const [onlinePlayerIds, setOnlinePlayerIds] = useState<Set<string>>(new Set());
 
   const channelRef = useRef<RealtimeChannel | null>(null);
   const currentPlayerRef = useRef<Player | null>(null);
@@ -58,7 +61,15 @@ export function App() {
         .order('joined_at', { ascending: true });
 
       if (fetchErr) throw fetchErr;
-      if (data) setPlayers(data as Player[]);
+      if (data) {
+        setPlayers(data as Player[]);
+        if (currentPlayerRef.current) {
+          const freshCurrent = (data as Player[]).find((p) => p.id === currentPlayerRef.current?.id);
+          if (freshCurrent) {
+            setCurrentPlayer(freshCurrent);
+          }
+        }
+      }
     } catch (err: unknown) {
       console.error('Failed to fetch fireteam players:', err);
     }
@@ -91,6 +102,64 @@ export function App() {
 
         if (roomErr || !roomData) {
           localStorage.removeItem(STORAGE_KEY);
+          return;
+        }
+
+        // 1. Client-side last-seen check: if this device closed the room > 30s ago, purge it!
+        const lastSeen = localStorage.getItem(`fireteam_ballot_last_seen_${roomId}`);
+        const closedAt = localStorage.getItem(`fireteam_ballot_closed_at_${roomId}`);
+        const refTime = closedAt ? Number(closedAt) : (lastSeen ? Number(lastSeen) : null);
+
+        if (refTime && Date.now() - refTime > 30000) {
+          try {
+            await supabase.from('rooms').delete().eq('id', roomId);
+          } catch {
+            // ignore
+          }
+          localStorage.removeItem(STORAGE_KEY);
+          localStorage.removeItem(`fireteam_ballot_last_seen_${roomId}`);
+          localStorage.removeItem(`fireteam_ballot_closed_at_${roomId}`);
+          if (isMounted) {
+            setError('Fireteam room was killed because all players were disconnected for more than 30 seconds.');
+            setIsRestoringSession(false);
+          }
+          return;
+        }
+
+        // 2. Server-side heartbeat check: if no active tab updated heartbeat in > 30s, purge room!
+        const { data: heartbeat } = await supabase
+          .from('history')
+          .select('picked_at')
+          .eq('room_id', roomId)
+          .eq('raid_id', '__HEARTBEAT__')
+          .order('picked_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        let isExpired = false;
+        if (heartbeat?.picked_at) {
+          if (Date.now() - new Date(heartbeat.picked_at).getTime() > 30000) {
+            isExpired = true;
+          }
+        } else if (roomData.created_at) {
+          if (Date.now() - new Date(roomData.created_at).getTime() > 35000) {
+            isExpired = true;
+          }
+        }
+
+        if (isExpired) {
+          try {
+            await supabase.from('rooms').delete().eq('id', roomId);
+          } catch {
+            // ignore
+          }
+          localStorage.removeItem(STORAGE_KEY);
+          localStorage.removeItem(`fireteam_ballot_last_seen_${roomId}`);
+          localStorage.removeItem(`fireteam_ballot_closed_at_${roomId}`);
+          if (isMounted) {
+            setError('Fireteam room was killed because all players were disconnected for more than 30 seconds.');
+            setIsRestoringSession(false);
+          }
           return;
         }
 
@@ -171,6 +240,22 @@ export function App() {
 
     channelRef.current = channel;
 
+    const updateOnlinePresence = () => {
+      if (!channelRef.current) return;
+      const state = channelRef.current.presenceState();
+      const online = new Set<string>();
+      if (currentId) online.add(currentId);
+      for (const presences of Object.values(state)) {
+        if (Array.isArray(presences)) {
+          for (const p of presences) {
+            const pid = (p as { playerId?: string }).playerId;
+            if (pid) online.add(pid);
+          }
+        }
+      }
+      setOnlinePlayerIds(online);
+    };
+
     channel
       // 1. FAST BROADCAST: Instant peer-to-peer relay for room status changes
       .on('broadcast', { event: 'room_status' }, ({ payload }) => {
@@ -182,7 +267,11 @@ export function App() {
       .on('broadcast', { event: 'roster_sync' }, () => {
         fetchRoomPlayers(roomId);
       })
-      // 3. FAST BROADCAST: Instant kick detection
+      // 3. FAST BROADCAST: Instant ballot lock indicator update
+      .on('broadcast', { event: 'player_locked' }, () => {
+        fetchRoomPlayers(roomId);
+      })
+      // 4. FAST BROADCAST: Instant kick detection
       .on('broadcast', { event: 'player_kicked' }, ({ payload }) => {
         if (payload?.playerId === currentId) {
           localStorage.removeItem(STORAGE_KEY);
@@ -194,7 +283,7 @@ export function App() {
           setPlayers((prev) => prev.filter((p) => p.id !== payload.playerId));
         }
       })
-      // 4. FAST BROADCAST: Room disbanded
+      // 5. FAST BROADCAST: Room disbanded
       .on('broadcast', { event: 'room_disbanded' }, () => {
         localStorage.removeItem(STORAGE_KEY);
         setRoom(null);
@@ -202,7 +291,7 @@ export function App() {
         setPlayers([]);
         setError('Fireteam leader left. Room has been disbanded.');
       })
-      // 5. FAST BROADCAST: Leadership transferred to new host
+      // 6. FAST BROADCAST: Leadership transferred to new host
       .on('broadcast', { event: 'host_transferred' }, ({ payload }) => {
         if (payload?.newHostId) {
           setRoom((prev) => (prev ? { ...prev, host_player_id: payload.newHostId } : null));
@@ -212,28 +301,39 @@ export function App() {
           fetchRoomPlayers(roomId);
         }
       })
-      // 6. PRESENCE TRACKING: Detect disconnected / closed tabs with multi-tab protection
+      // 7. PRESENCE TRACKING: Detect connected/disconnected players live
+      .on('presence', { event: 'sync' }, () => {
+        updateOnlinePresence();
+      })
       .on('presence', { event: 'join' }, ({ newPresences }) => {
-        // If a player has reconnected or opened another tab, cancel any pending disconnect timer
+        updateOnlinePresence();
+        // If a player reconnected or opened another tab, cancel any pending disconnect timer
         for (const presence of newPresences) {
           const joinedId = (presence as { playerId?: string }).playerId;
           if (joinedId && disconnectTimers.current.has(joinedId)) {
             clearTimeout(disconnectTimers.current.get(joinedId)!);
             disconnectTimers.current.delete(joinedId);
           }
+          if (joinedId === roomRef.current?.host_player_id && disconnectTimers.current.has('HOST_DISCONNECT')) {
+            clearTimeout(disconnectTimers.current.get('HOST_DISCONNECT')!);
+            disconnectTimers.current.delete('HOST_DISCONNECT');
+          }
         }
       })
       .on('presence', { event: 'leave' }, ({ leftPresences }) => {
+        updateOnlinePresence();
+
         for (const presence of leftPresences) {
           const leftPlayerId = (presence as { playerId?: string }).playerId;
           if (!leftPlayerId) continue;
 
-          // Multi-tab check: If player is still active in another open tab, do NOT kick!
+          // Multi-tab check: If player is still active in another open tab, do NOT handle disconnect!
           if (isPlayerActiveInAnyTab(leftPlayerId)) {
             continue;
           }
 
-          // If the leader closed all tabs:
+          // Case A: Fireteam leader closed all tabs:
+          // Give leader a generous 30s grace period to refresh or recover before transferring leadership
           if (leftPlayerId === roomRef.current?.host_player_id && leftPlayerId !== currentId) {
             if (!disconnectTimers.current.has('HOST_DISCONNECT')) {
               const timer = setTimeout(async () => {
@@ -242,7 +342,7 @@ export function App() {
                   return;
                 }
 
-                // Host never returned! Transfer leadership to oldest remaining player
+                // Host never returned after 30s! Check remaining players
                 const { data: currentRoster } = await supabase
                   .from('players')
                   .select('*')
@@ -250,49 +350,53 @@ export function App() {
                   .order('joined_at', { ascending: true });
 
                 const remaining = (currentRoster || []).filter((p) => p.id !== leftPlayerId);
-                if (remaining.length > 0) {
-                  const newHost = remaining[0];
-                  // If current client is the chosen new host, execute promotion and delete old host
-                  if (currentPlayerRef.current?.id === newHost.id) {
-                    await supabase.from('players').update({ is_host: true }).eq('id', newHost.id);
-                    await supabase.from('rooms').update({ host_player_id: newHost.id }).eq('id', roomId);
-                    await supabase.from('players').delete().eq('id', leftPlayerId);
-                    setCurrentPlayer((prev) => (prev ? { ...prev, is_host: true } : null));
-                    setRoom((prev) => (prev ? { ...prev, host_player_id: newHost.id } : null));
-                    channelRef.current?.send({
-                      type: 'broadcast',
-                      event: 'host_transferred',
-                      payload: { newHostId: newHost.id, newHostName: newHost.name },
-                    });
-                    fetchRoomPlayers(roomId);
-                  }
-                } else {
-                  // No players left in room, delete room from DB
+                const onlineRemaining = remaining.filter((p) => isPlayerActiveInAnyTab(p.id));
+
+                if (onlineRemaining.length === 0) {
+                  // ALL players in room are disconnected for > 30 seconds! Kill room in DB!
                   try {
                     await supabase.from('rooms').delete().eq('id', roomId);
-                  } catch {
-                    // ignore
+                  } catch (err) {
+                    console.error('Failed to kill abandoned room:', err);
                   }
                   localStorage.removeItem(STORAGE_KEY);
                   setRoom(null);
                   setCurrentPlayer(null);
                   setPlayers([]);
-                  setError('Fireteam leader disconnected. Room has been disbanded.');
+                  setError('All players disconnected for more than 30 seconds. Room has been killed.');
+                  return;
                 }
-              }, 4000);
+
+                const newHost = onlineRemaining[0] || remaining[0];
+                if (currentPlayerRef.current?.id === newHost.id) {
+                  await supabase.from('players').update({ is_host: true }).eq('id', newHost.id);
+                  await supabase.from('rooms').update({ host_player_id: newHost.id }).eq('id', roomId);
+                  await supabase.from('players').delete().eq('id', leftPlayerId);
+                  setCurrentPlayer((prev) => (prev ? { ...prev, is_host: true } : null));
+                  setRoom((prev) => (prev ? { ...prev, host_player_id: newHost.id } : null));
+                  channelRef.current?.send({
+                    type: 'broadcast',
+                    event: 'host_transferred',
+                    payload: { newHostId: newHost.id, newHostName: newHost.name },
+                  });
+                  fetchRoomPlayers(roomId);
+                }
+              }, 30000);
               disconnectTimers.current.set('HOST_DISCONNECT', timer);
             }
             return;
           }
 
-          // If current client is the host and a non-host player has closed ALL their tabs:
-          if (currentPlayerRef.current?.is_host && leftPlayerId !== currentId) {
+          // Case B: Non-host player closed all tabs:
+          // If in voting or revealed, DO NOT auto-kick! Keep their record and votes safe.
+          // Only in lobby do we schedule a 60s cleanup timer if they abandon the session.
+          const isLobby = roomRef.current?.status === 'lobby';
+          if (isLobby && currentPlayerRef.current?.is_host && leftPlayerId !== currentId) {
             if (!disconnectTimers.current.has(leftPlayerId)) {
               const timer = setTimeout(async () => {
                 disconnectTimers.current.delete(leftPlayerId);
 
-                // Double check before removing: did the player reconnect or still have an open tab?
-                if (isPlayerActiveInAnyTab(leftPlayerId)) {
+                if (isPlayerActiveInAnyTab(leftPlayerId) || roomRef.current?.status !== 'lobby') {
                   return;
                 }
 
@@ -302,13 +406,13 @@ export function App() {
                   type: 'broadcast',
                   event: 'roster_sync',
                 });
-              }, 4000);
+              }, 60000); // 60s grace period in lobby
               disconnectTimers.current.set(leftPlayerId, timer);
             }
           }
         }
       })
-      // 6. POSTGRES WAL BACKUP: In case direct DB changes happen
+      // 8. POSTGRES WAL BACKUP: In case direct DB changes happen
       .on(
         'postgres_changes',
         {
@@ -370,11 +474,47 @@ export function App() {
             name: currentPlayer.name,
             isHost: currentPlayer.is_host,
           });
+          updateOnlinePresence();
+          // Initial heartbeat
+          localStorage.setItem(`fireteam_ballot_last_seen_${roomId}`, Date.now().toString());
+          supabase.from('history').insert({
+            room_id: roomId,
+            raid_id: '__HEARTBEAT__',
+            picked_at: new Date().toISOString(),
+          });
         }
       });
 
+    // Periodic heartbeat every 10 seconds while tab is active
+    const heartbeatTimer = setInterval(async () => {
+      if (!isSubscribed) return;
+      localStorage.setItem(`fireteam_ballot_last_seen_${roomId}`, Date.now().toString());
+      try {
+        await supabase.from('history').delete().eq('room_id', roomId).eq('raid_id', '__HEARTBEAT__');
+        await supabase.from('history').insert({
+          room_id: roomId,
+          raid_id: '__HEARTBEAT__',
+          picked_at: new Date().toISOString(),
+        });
+      } catch {
+        // ignore
+      }
+    }, 10000);
+
+    // Synchronously track close/unload time in localStorage
+    const handleBeforeUnload = () => {
+      localStorage.setItem(`fireteam_ballot_closed_at_${roomId}`, Date.now().toString());
+      localStorage.setItem(`fireteam_ballot_last_seen_${roomId}`, Date.now().toString());
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
+
     return () => {
       isSubscribed = false;
+      clearInterval(heartbeatTimer);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
       channel.untrack();
       supabase.removeChannel(channel);
       channelRef.current = null;
@@ -490,6 +630,36 @@ export function App() {
             throw new Error('This fireteam has already initiated voting or deployed.');
           }
 
+          // Check if room was abandoned / all players disconnected for > 30s
+          const { data: heartbeat } = await supabase
+            .from('history')
+            .select('picked_at')
+            .eq('room_id', targetRoom.id)
+            .eq('raid_id', '__HEARTBEAT__')
+            .order('picked_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          let isExpired = false;
+          if (heartbeat?.picked_at) {
+            if (Date.now() - new Date(heartbeat.picked_at).getTime() > 30000) {
+              isExpired = true;
+            }
+          } else if (targetRoom.created_at) {
+            if (Date.now() - new Date(targetRoom.created_at).getTime() > 35000) {
+              isExpired = true;
+            }
+          }
+
+          if (isExpired) {
+            try {
+              await supabase.from('rooms').delete().eq('id', targetRoom.id);
+            } catch {
+              // ignore
+            }
+            throw new Error(`Room [${code}] was closed because all players were disconnected for more than 30 seconds.`);
+          }
+
           const existingPlayers = Array.isArray(targetRoom.players) ? targetRoom.players : [];
           const hasHost = existingPlayers.some((p: { is_host?: boolean }) => p.is_host);
           if (!hasHost || !targetRoom.host_player_id) {
@@ -557,6 +727,8 @@ export function App() {
 
     // 1. Optimistic instant local update
     setRoom((prev) => (prev ? { ...prev, status: 'voting' } : null));
+    setCurrentPlayer((prev) => (prev ? { ...prev, has_locked: false, veto_used: false } : null));
+    setPlayers((prev) => prev.map((p) => ({ ...p, has_locked: false, veto_used: false })));
 
     // 2. Instant broadcast to all other open tabs (10ms)
     channelRef.current?.send({
@@ -564,10 +736,19 @@ export function App() {
       event: 'room_status',
       payload: { status: 'voting' },
     });
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'roster_sync',
+    });
 
     // 3. Persist to database in background
     try {
-      await supabase.from('rooms').update({ status: 'voting' }).eq('id', room.id);
+      await Promise.all([
+        supabase.from('rooms').update({ status: 'voting' }).eq('id', room.id),
+        supabase.from('players').update({ has_locked: false, veto_used: false }).eq('room_id', room.id),
+        supabase.from('votes').delete().eq('room_id', room.id),
+        supabase.from('vetoes').delete().eq('room_id', room.id),
+      ]);
     } catch (err) {
       console.error('Failed to update room status in DB:', err);
     }
@@ -579,6 +760,8 @@ export function App() {
 
     // 1. Optimistic instant local update
     setRoom((prev) => (prev ? { ...prev, status: 'lobby' } : null));
+    setCurrentPlayer((prev) => (prev ? { ...prev, has_locked: false, veto_used: false } : null));
+    setPlayers((prev) => prev.map((p) => ({ ...p, has_locked: false, veto_used: false })));
 
     // 2. Instant broadcast to all other open tabs
     channelRef.current?.send({
@@ -586,21 +769,31 @@ export function App() {
       event: 'room_status',
       payload: { status: 'lobby' },
     });
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'roster_sync',
+    });
 
     // 3. Persist to database
     try {
-      await supabase.from('rooms').update({ status: 'lobby' }).eq('id', room.id);
+      await Promise.all([
+        supabase.from('rooms').update({ status: 'lobby' }).eq('id', room.id),
+        supabase.from('players').update({ has_locked: false, veto_used: false }).eq('room_id', room.id),
+        supabase.from('votes').delete().eq('room_id', room.id),
+        supabase.from('vetoes').delete().eq('room_id', room.id),
+      ]);
     } catch (err) {
       console.error('Failed to update room status in DB:', err);
     }
   };
 
-  // Action: Host Kicks a Player (Instant broadcast + DB delete)
+  // Action: Host Kicks a Player (Instant broadcast + DB delete + auto-proceed check)
   const handleKickPlayer = async (targetPlayerId: string) => {
     if (!room || !currentPlayer?.is_host) return;
 
     // 1. Optimistic local update
-    setPlayers((prev) => prev.filter((p) => p.id !== targetPlayerId));
+    const remainingPlayers = players.filter((p) => p.id !== targetPlayerId);
+    setPlayers(remainingPlayers);
 
     // 2. Instant broadcast kick to all tabs
     channelRef.current?.send({
@@ -609,11 +802,215 @@ export function App() {
       payload: { playerId: targetPlayerId },
     });
 
-    // 3. Delete from DB
+    // 3. Delete from DB (player, votes, vetoes)
     try {
-      await supabase.from('players').delete().eq('id', targetPlayerId);
+      await Promise.all([
+        supabase.from('players').delete().eq('id', targetPlayerId),
+        supabase.from('votes').delete().eq('room_id', room.id).eq('player_id', targetPlayerId),
+        supabase.from('vetoes').delete().eq('room_id', room.id).eq('player_id', targetPlayerId),
+      ]);
+
+      // 4. Fetch updated roster to check state
+      const { data: updatedPlayers } = await supabase
+        .from('players')
+        .select('*')
+        .eq('room_id', room.id)
+        .order('joined_at', { ascending: true });
+
+      if (updatedPlayers && updatedPlayers.length > 0) {
+        setPlayers(updatedPlayers as Player[]);
+
+        // 5. If in voting: check if all remaining members have voted!
+        if (room.status === 'voting') {
+          const allLocked = updatedPlayers.every((p) => p.has_locked);
+          if (allLocked) {
+            // Everyone remaining has locked in! Advance automatically to reveal!
+            await supabase.from('rooms').update({ status: 'revealed' }).eq('id', room.id);
+            setRoom((prev) => (prev ? { ...prev, status: 'revealed' } : null));
+            channelRef.current?.send({
+              type: 'broadcast',
+              event: 'room_status',
+              payload: { status: 'revealed' },
+            });
+          }
+        }
+      }
+
+      channelRef.current?.send({
+        type: 'broadcast',
+        event: 'roster_sync',
+      });
     } catch (err) {
       console.error('Failed to kick player in DB:', err);
+    }
+  };
+
+  // Action: Host Disbands / Kills Room
+  const handleDisbandRoom = async () => {
+    if (!room || !currentPlayer?.is_host) return;
+
+    if (!window.confirm('Are you sure you want to kill and disband this room? All data will be deleted.')) {
+      return;
+    }
+
+    try {
+      channelRef.current?.send({
+        type: 'broadcast',
+        event: 'room_disbanded',
+      });
+      await supabase.from('rooms').delete().eq('id', room.id);
+    } catch (err) {
+      console.error('Error disbanding room:', err);
+    }
+
+    localStorage.removeItem(STORAGE_KEY);
+    setRoom(null);
+    setCurrentPlayer(null);
+    setPlayers([]);
+    setError('Fireteam room killed and disbanded.');
+  };
+
+  // Action: Lock In Ballot and Veto
+  const handleLockIn = async (scores: Record<string, number>, vetoRaidId: string | null) => {
+    if (!room || !currentPlayer || currentPlayer.has_locked) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      await withTimeout(
+        (async () => {
+          // 1. Insert/upsert votes for each raid
+          const voteRows = Object.entries(scores).map(([raidId, score]) => ({
+            room_id: room.id,
+            player_id: currentPlayer.id,
+            raid_id: raidId,
+            score,
+          }));
+
+          const { error: votesErr } = await supabase.from('votes').upsert(voteRows, {
+            onConflict: 'room_id,player_id,raid_id',
+          });
+          if (votesErr) throw votesErr;
+
+          // 2. Insert/upsert veto if specified
+          if (vetoRaidId) {
+            const { error: vetoErr } = await supabase.from('vetoes').upsert(
+              {
+                room_id: room.id,
+                player_id: currentPlayer.id,
+                raid_id: vetoRaidId,
+              },
+              { onConflict: 'room_id,player_id' }
+            );
+            if (vetoErr) throw vetoErr;
+          }
+
+          // 3. Update player has_locked and veto_used in DB
+          const { error: playerErr } = await supabase
+            .from('players')
+            .update({
+              has_locked: true,
+              veto_used: Boolean(vetoRaidId),
+            })
+            .eq('id', currentPlayer.id);
+          if (playerErr) throw playerErr;
+
+          // 4. Update local player state
+          setCurrentPlayer((prev) =>
+            prev ? { ...prev, has_locked: true, veto_used: Boolean(vetoRaidId) } : null
+          );
+
+          // 5. Broadcast lock-in event to all other clients
+          channelRef.current?.send({
+            type: 'broadcast',
+            event: 'player_locked',
+            payload: { playerId: currentPlayer.id },
+          });
+
+          // 6. Check if everyone is now locked in
+          const { data: updatedPlayers } = await supabase
+            .from('players')
+            .select('*')
+            .eq('room_id', room.id);
+
+          if (updatedPlayers) {
+            setPlayers(updatedPlayers as Player[]);
+            const allLocked = updatedPlayers.every((p) => p.has_locked);
+            if (allLocked && updatedPlayers.length > 0) {
+              await supabase.from('rooms').update({ status: 'revealed' }).eq('id', room.id);
+              setRoom((prev) => (prev ? { ...prev, status: 'revealed' } : null));
+              channelRef.current?.send({
+                type: 'broadcast',
+                event: 'room_status',
+                payload: { status: 'revealed' },
+              });
+            }
+          }
+        })(),
+        8000,
+        'Sealing ballot timed out. Please try locking in again.'
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to lock in ballot.';
+      setError(msg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Action: Force Advance to Reveal
+  const handleForceAdvance = async () => {
+    if (!room || !currentPlayer?.is_host) return;
+
+    setIsLoading(true);
+    try {
+      await supabase.from('rooms').update({ status: 'revealed' }).eq('id', room.id);
+      setRoom((prev) => (prev ? { ...prev, status: 'revealed' } : null));
+      channelRef.current?.send({
+        type: 'broadcast',
+        event: 'room_status',
+        payload: { status: 'revealed' },
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to advance to reveal.';
+      setError(msg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Action: Reset Ballots to Revote
+  const handleResetToVoting = async () => {
+    if (!room || !currentPlayer?.is_host) return;
+
+    setIsLoading(true);
+    try {
+      await Promise.all([
+        supabase.from('players').update({ has_locked: false, veto_used: false }).eq('room_id', room.id),
+        supabase.from('votes').delete().eq('room_id', room.id),
+        supabase.from('vetoes').delete().eq('room_id', room.id),
+        supabase.from('rooms').update({ status: 'voting' }).eq('id', room.id),
+      ]);
+
+      setRoom((prev) => (prev ? { ...prev, status: 'voting' } : null));
+      setCurrentPlayer((prev) => (prev ? { ...prev, has_locked: false, veto_used: false } : null));
+      setPlayers((prev) => prev.map((p) => ({ ...p, has_locked: false, veto_used: false })));
+
+      channelRef.current?.send({
+        type: 'broadcast',
+        event: 'room_status',
+        payload: { status: 'voting' },
+      });
+      channelRef.current?.send({
+        type: 'broadcast',
+        event: 'roster_sync',
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to reset ballot.';
+      setError(msg);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -703,29 +1100,36 @@ export function App() {
             room={room}
             players={players}
             currentPlayer={currentPlayer}
+            onlinePlayerIds={onlinePlayerIds}
             onStartVoting={handleStartVoting}
             onKickPlayer={handleKickPlayer}
+            onDisbandRoom={handleDisbandRoom}
+            isLoading={isLoading}
+          />
+        ) : room.status === 'voting' ? (
+          <VotingView
+            room={room}
+            players={players}
+            currentPlayer={currentPlayer}
+            onlinePlayerIds={onlinePlayerIds}
+            onLockIn={handleLockIn}
+            onForceAdvance={handleForceAdvance}
+            onReturnToLobby={handleReturnToLobby}
+            onKickPlayer={handleKickPlayer}
+            onDisbandRoom={handleDisbandRoom}
             isLoading={isLoading}
           />
         ) : (
-          /* Transition for voting state */
-          <div className="panel-card" style={{ borderColor: 'var(--gold)' }}>
-            <div className="label-caps" style={{ color: 'var(--gold)', marginBottom: '8px' }}>
-              [STAGE: VOTING PHASE INITIATED]
-            </div>
-            <h2>LOCK-IN PROTOCOL ACTIVE</h2>
-            <p style={{ color: 'var(--text-muted)', margin: '12px 0 20px', fontSize: '0.95rem' }}>
-              All {players.length} Guardians in fireteam [{room.code}] are transitioning to private voting.
-            </p>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                className="btn btn-sm"
-                onClick={handleReturnToLobby}
-              >
-                RETURN TO LOBBY (TEST)
-              </button>
-            </div>
-          </div>
+          <RevealedView
+            room={room}
+            players={players}
+            currentPlayer={currentPlayer}
+            onlinePlayerIds={onlinePlayerIds}
+            onResetToVoting={handleResetToVoting}
+            onReturnToLobby={handleReturnToLobby}
+            onDisbandRoom={handleDisbandRoom}
+            isLoading={isLoading}
+          />
         )}
       </main>
     </div>
