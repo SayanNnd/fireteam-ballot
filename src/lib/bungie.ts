@@ -92,6 +92,7 @@ export async function fetchLiveFeaturedRaidIds(): Promise<Set<string>> {
   }
 
   const urls = [
+    typeof window !== 'undefined' ? '/api/bungie-milestones' : null,
     typeof window !== 'undefined' && window.location.port ? '/bungie-proxy/Platform/Destiny2/Milestones/' : null,
     'https://www.bungie.net/Platform/Destiny2/Milestones/',
   ].filter(Boolean) as string[];

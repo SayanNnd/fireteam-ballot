@@ -6,6 +6,11 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      '/api/bungie-milestones': {
+        target: 'https://www.bungie.net',
+        changeOrigin: true,
+        rewrite: () => '/Platform/Destiny2/Milestones/',
+      },
       '/bungie-proxy': {
         target: 'https://www.bungie.net',
         changeOrigin: true,
