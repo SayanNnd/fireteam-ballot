@@ -270,4 +270,22 @@ describe('pickRaid - Phase 3 Weighted Pick Algorithm', () => {
     expect(parsed.has('salvations-edge')).toBe(false);
     expect(parsed.has('kings-fall')).toBe(false);
   });
+
+  it('disliked raids (SKIP 1) receive 0.05 weight and are 60x less likely than neutral (MID 3)', () => {
+    const votes = [
+      { raid_id: mockRaids[0].id, score: 1 }, // SKIP
+      { raid_id: mockRaids[1].id, score: 3 }, // MID
+      { raid_id: mockRaids[2].id, score: 5 }, // TOP
+    ];
+
+    const { weights } = calculateRaidWeights(mockRaids, votes);
+    expect(weights[mockRaids[0].id]).toBe(0.05);
+    expect(weights[mockRaids[1].id]).toBe(3.0);
+    expect(weights[mockRaids[2].id]).toBe(25.0);
+
+    // Neutral is exactly 60x more likely than SKIP
+    expect(weights[mockRaids[1].id] / weights[mockRaids[0].id]).toBe(60);
+    // TOP is 500x more likely than SKIP
+    expect(weights[mockRaids[2].id] / weights[mockRaids[0].id]).toBe(500);
+  });
 });

@@ -39,13 +39,13 @@ export interface PickResult {
  */
 export function getScoreWeight(score: number): number {
   const s = Number(score) || 0;
-  if (s <= 1) return 0.2; // SKIP: almost zero chance
-  if (s === 2) return 1.0; // LOW
-  if (s === 3) return 3.0; // MID (neutral baseline)
-  if (s === 4) return 10.0; // HIGH (over 3x higher than neutral)
-  if (s >= 5) return 25.0; // TOP (over 8x higher than neutral, 25x higher than LOW)
+  if (s <= 1) return 0.05; // SKIP (1): 60x less likely than neutral
+  if (s === 2) return 0.5;  // LOW (2): 6x less likely than neutral
+  if (s === 3) return 3.0;  // MID (3): Neutral baseline
+  if (s === 4) return 10.0; // HIGH (4): 3.3x more likely than neutral
+  if (s >= 5) return 25.0; // TOP (5): 8.3x more likely than neutral, 500x more than SKIP
   // Fallback smooth interpolation for custom numeric values
-  return Math.max(0.2, Math.min(25.0, Math.pow(s, 2.0)));
+  return Math.max(0.05, Math.min(25.0, Math.pow(s, 2.0)));
 }
 
 export function calculateRaidWeights(
@@ -111,11 +111,11 @@ export function calculateRaidWeights(
   const weights: Record<string, number> = {};
   for (const raid of eligibleRaids) {
     const rawScore = scoreTotals[raid.id] ?? 0;
-    // Base weight is at least 0.5 so unvoted/zero-voted raids still have a valid baseline
-    const baseWeight = Math.max(0.5, rawScore);
+    // Base weight respects explicit votes down to 0.05 (SKIP), or 0.5 if unvoted
+    const baseWeight = rawScore > 0 ? rawScore : 0.5;
     const multiplier = historyPenalty[raid.id] ?? 1.0;
-    // Strict floor at 0.2: history penalty cannot push weight to zero or below
-    const finalWeight = Math.max(0.2, Number((baseWeight * multiplier).toFixed(2)));
+    // Strict floor at 0.05: ensures disliked raids remain at minimal ~0.05 chance
+    const finalWeight = Math.max(0.05, Number((baseWeight * multiplier).toFixed(2)));
     weights[raid.id] = finalWeight;
   }
 
