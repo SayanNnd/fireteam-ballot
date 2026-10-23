@@ -3,6 +3,8 @@ import type { Room, Player } from '../types';
 import { supabase } from '../lib/supabase';
 import raids from '../data/raids';
 import { pickRaid, calculateRaidWeights, type VoteInput, type VetoInput, type HistoryInput } from '../lib/pick';
+import { RevealAnimation } from './RevealAnimation';
+import { RecentClearsModal } from './RecentClearsModal';
 
 interface RevealedViewProps {
   room: Room;
@@ -13,7 +15,6 @@ interface RevealedViewProps {
   onReturnToLobby: () => Promise<void>;
   onDisbandRoom?: () => Promise<void>;
   onPickDetermined?: (pickedRaidId: string) => void;
-  onReroll?: () => Promise<void>;
   isLoading: boolean;
 }
 
@@ -28,7 +29,6 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
   onReturnToLobby,
   onDisbandRoom,
   onPickDetermined,
-  onReroll,
   isLoading,
 }) => {
   const [vetoes, setVetoes] = useState<{ player_id: string; raid_id: string }[]>([]);
@@ -36,7 +36,32 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
   const [history, setHistory] = useState<{ raid_id: string; picked_at: string }[]>([]);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [isPicking, setIsPicking] = useState(false);
+  const [showRecentClearsModal, setShowRecentClearsModal] = useState(false);
   const hasExecutedPick = useRef(false);
+  const recentClearsPanelRef = useRef<HTMLDivElement>(null);
+  const recentClearsButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Close Recent Clears panel when clicking outside (but not on any .recent-clears-trigger)
+  useEffect(() => {
+    if (!showRecentClearsModal) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as Element;
+      const outsidePanel = recentClearsPanelRef.current && !recentClearsPanelRef.current.contains(target);
+      const onTrigger = !!target.closest('.recent-clears-trigger');
+      if (outsidePanel && !onTrigger) {
+        setShowRecentClearsModal(false);
+      }
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
+  }, [showRecentClearsModal]);
+
+  // Animation state: track if reveal animation should be shown
+  const [showAnimation, setShowAnimation] = useState(() => {
+    // Only show auto-animation once per session per pick
+    const animSeenKey = `fireteam_ballot_anim_seen_${room.id}_${room.picked_raid_id || 'initial'}`;
+    return !sessionStorage.getItem(animSeenKey);
+  });
 
   // 1. Fetch all votes, vetoes, and room history from Supabase
   useEffect(() => {
@@ -59,7 +84,6 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
         if (vetoesRes.data) setVetoes(vetoesRes.data);
         if (votesRes.data) setVotes(votesRes.data);
         if (historyRes.data) {
-          // Filter out internal system heartbeat records
           const realHistory = historyRes.data.filter((h) => !h.raid_id.startsWith('__'));
           setHistory(realHistory);
         }
@@ -76,7 +100,7 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
     };
   }, [room.id]);
 
-  // 2. Authoritative Pick Selection: Host executes pick, or oldest online player if host is offline
+  // 2. Authoritative Pick Selection: Host executes pick
   useEffect(() => {
     if (!isDataLoaded || room.picked_raid_id || hasExecutedPick.current) return;
 
@@ -84,7 +108,6 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
     const vetoInputs: VetoInput[] = vetoes.map((v) => ({ raid_id: v.raid_id }));
     const historyInputs: HistoryInput[] = history.map((h) => ({ raid_id: h.raid_id, picked_at: h.picked_at }));
 
-    // Check if current player is designated authority to write the pick
     const isHost = currentPlayer.is_host;
     const isHostOnline = onlinePlayerIds.has(room.host_player_id || '');
     const onlineRemaining = players.filter((p) => onlinePlayerIds.has(p.id) || p.id === currentPlayer.id);
@@ -142,7 +165,7 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
     onPickDetermined,
   ]);
 
-  // 3. Compute probability distribution weights for display
+  // 3. Compute vote scores for display
   const voteInputs: VoteInput[] = votes.map((v) => ({ raid_id: v.raid_id, score: v.score }));
   const vetoInputs: VetoInput[] = vetoes.map((v) => ({ raid_id: v.raid_id }));
   const historyInputs: HistoryInput[] = history.map((h) => ({ raid_id: h.raid_id, picked_at: h.picked_at }));
@@ -154,76 +177,63 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
     historyInputs
   );
 
-  const totalWeight = Object.values(weights).reduce((sum, w) => sum + w, 0);
+  // Compute raw votes for each raid from votes array
+  const getRawVotesForRaid = (raidId: string): number => {
+    return votes
+      .filter((v) => v.raid_id.toLowerCase() === raidId.toLowerCase())
+      .reduce((sum, v) => sum + v.score, 0);
+  };
 
   // Map picked raid from ID
   const pickedRaidId = room.picked_raid_id;
   const isPoolEmpty = pickedRaidId === '__EMPTY_POOL__' || (isDataLoaded && eligibleRaids.length === 0);
   const pickedRaid = raids.find((r) => r.id === pickedRaidId) || null;
 
-  const pickedWeight = pickedRaid ? weights[pickedRaid.id] || 0 : 0;
-  const pickedPercentage = totalWeight > 0 ? ((pickedWeight / totalWeight) * 100).toFixed(1) : '0';
+  const pickedRawVotes = pickedRaid ? getRawVotesForRaid(pickedRaid.id) : 0;
 
-  // Recency penalty only applies to the 2 most recent picks; on the 3rd roll/revote, it drops to 0!
+  // Sort eligible destinations: winner always first, then by raw votes descending
+  const sortedEligibleRaids = [...eligibleRaids].sort((a, b) => {
+    const aIsWinner = pickedRaid?.id === a.id;
+    const bIsWinner = pickedRaid?.id === b.id;
+    if (aIsWinner) return -1;
+    if (bIsWinner) return 1;
+    const rawA = votes.filter(v => v.raid_id.toLowerCase() === a.id.toLowerCase()).reduce((s, v) => s + v.score, 0);
+    const rawB = votes.filter(v => v.raid_id.toLowerCase() === b.id.toLowerCase()).reduce((s, v) => s + v.score, 0);
+    if (rawB !== rawA) return rawB - rawA;
+    return a.name.localeCompare(b.name);
+  });
+
   const isRecentHistoryRaid = (raidId: string): boolean => {
     return history.slice(0, 2).some((h) => h.raid_id.toLowerCase() === raidId.toLowerCase());
   };
 
-  // Action: Reroll Target
-  const handleReroll = async () => {
-    if (isPicking || isLoading || !currentPlayer.is_host) return;
-
-    if (onReroll) {
-      await onReroll();
-      return;
-    }
-
-    setIsPicking(true);
-    try {
-      const result = pickRaid(raids, voteInputs, vetoInputs, historyInputs);
-      const chosenId = result.pickedRaid?.id || '__EMPTY_POOL__';
-
-      await supabase
-        .from('rooms')
-        .update({ picked_raid_id: chosenId })
-        .eq('id', room.id);
-
-      if (result.pickedRaid) {
-        const pickedAt = getIsoTimestamp();
-        await supabase.from('history').insert({
-          room_id: room.id,
-          raid_id: result.pickedRaid.id,
-          picked_at: pickedAt,
-        });
-
-        setHistory((prev) => [{ raid_id: result.pickedRaid!.id, picked_at: pickedAt }, ...prev]);
-      }
-
-      if (onPickDetermined) {
-        onPickDetermined(chosenId);
-      }
-    } catch (err) {
-      console.error('Failed to reroll target:', err);
-    } finally {
-      setIsPicking(false);
+  const handleDismissAnimation = () => {
+    setShowAnimation(false);
+    if (pickedRaidId) {
+      sessionStorage.setItem(`fireteam_ballot_anim_seen_${room.id}_${pickedRaidId}`, 'true');
     }
   };
 
+
+  // If reveal animation is active and destination is confirmed, render animation overlay
+  if (showAnimation && pickedRaid && !isPoolEmpty) {
+    return (
+      <RevealAnimation
+        eligibleRaids={eligibleRaids}
+        pickedRaid={pickedRaid}
+        pickedVotes={pickedRawVotes}
+        onComplete={handleDismissAnimation}
+      />
+    );
+  }
+
   return (
-    <div>
+    <div className="revealed-layout-container">
       {/* Hero Selected Raid Card */}
       {isPoolEmpty ? (
-        <div
-          className="panel-card"
-          style={{
-            borderColor: 'var(--border-strong)',
-            padding: '24px',
-            marginBottom: '20px',
-            backgroundColor: 'var(--bg-panel)',
-          }}
-        >
-          <div className="label-caps" style={{ color: 'var(--gold)', marginBottom: '8px' }}>
-            [CRITICAL // ALL DESTINATIONS VETOED]
+        <div className="panel-card panel-hero-card" style={{ borderColor: 'var(--border-strong)' }}>
+          <div className="label-caps gold-label" style={{ marginBottom: '8px' }}>
+            ALL DESTINATIONS VETOED
           </div>
           <h2 style={{ fontSize: '1.6rem', marginBottom: '8px', color: 'var(--text-main)' }}>
             NO VALID RAID DESTINATIONS REMAIN
@@ -234,199 +244,126 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
         </div>
       ) : pickedRaid ? (
         <div
-          className="panel-card"
+          className="panel-card panel-hero-card"
           style={{
-            borderColor: 'var(--gold)',
-            padding: '24px 28px',
-            marginBottom: '20px',
-            backgroundColor: 'var(--bg-panel)',
+            backgroundImage: `linear-gradient(to right, rgba(6, 10, 16, 0.97) 0%, rgba(6, 10, 16, 0.82) 40%, rgba(6, 10, 16, 0.55) 70%, rgba(6, 10, 16, 0.75) 100%), url(${pickedRaid.image || '/raids/placeholder.svg'})`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            minHeight: '340px',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
           }}
         >
-          <div className="label-caps" style={{ color: 'var(--gold)', marginBottom: '8px' }}>
-            [DEPLOYMENT TARGET]
-          </div>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'flex-start',
-              flexWrap: 'wrap',
-              gap: '16px',
-            }}
-          >
+          <div className="hero-top-row">
             <div>
-              <h1
-                style={{
-                  fontFamily: 'var(--font-display)',
-                  fontSize: '2.5rem',
-                  fontWeight: 800,
-                  color: 'var(--gold)',
-                  lineHeight: 1.1,
-                  letterSpacing: '0.03em',
-                  marginBottom: '8px',
-                }}
-              >
-                {pickedRaid.name}
-              </h1>
-              <p
-                style={{
-                  color: 'var(--text-main)',
-                  fontSize: '1.05rem',
-                  maxWidth: '680px',
-                  lineHeight: '1.4',
-                }}
-              >
+              <div className="label-caps gold-label" style={{ marginBottom: '6px' }}>
+                SELECTED DESTINATION
+              </div>
+              <h1 className="hero-raid-name">{pickedRaid.name}</h1>
+              <p className="hero-raid-desc">
+                {pickedRaid.location && (
+                  <span style={{ color: 'var(--meta-cyan)', fontWeight: 600 }}>
+                    {pickedRaid.location}
+                  </span>
+                )}
+                {pickedRaid.location && pickedRaid.tagline && <span style={{ color: 'var(--text-muted)' }}> · </span>}
                 {pickedRaid.tagline}
               </p>
             </div>
 
-            <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
-              <div
-                className="tag tag-gold"
-                style={{
-                  fontSize: '0.95rem',
-                  padding: '8px 16px',
-                  fontFamily: 'var(--font-condensed)',
-                  letterSpacing: '0.06em',
-                }}
-              >
-                {pickedPercentage}% CHANCE
+            <div className="hero-stats-column">
+              <div className="hero-odds-badge">
+                {pickedRawVotes} {pickedRawVotes === 1 ? 'VOTE' : 'VOTES'}
               </div>
-              {isRecentHistoryRaid(pickedRaid.id) && (
-                <div
-                  style={{
-                    fontSize: '0.72rem',
-                    color: 'var(--text-subtle)',
-                    fontFamily: 'var(--font-condensed)',
-                  }}
-                >
-                  [RECENT RUN]
-                </div>
-              )}
-              {currentPlayer.is_host && (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-primary"
-                  onClick={handleReroll}
-                  disabled={isPicking || isLoading}
-                  style={{ marginTop: '4px' }}
-                >
-                  {isPicking ? 'ROLLING...' : 'REROLL'}
-                </button>
-              )}
             </div>
           </div>
         </div>
       ) : (
-        <div
-          className="panel-card"
-          style={{
-            borderColor: 'var(--gold-border)',
-            padding: '24px',
-            marginBottom: '20px',
-            textAlign: 'center',
-          }}
-        >
-          <div className="label-caps" style={{ color: 'var(--gold)', marginBottom: '6px' }}>
-            [SELECTING TARGET...]
+        <div className="panel-card" style={{ textAlign: 'center', padding: '36px' }}>
+          <div className="label-caps gold-label" style={{ marginBottom: '8px' }}>
+            CALCULATING RESULTS...
           </div>
-          <h2 style={{ fontSize: '1.3rem' }}>
-            {isPicking ? 'SELECTING RAID...' : 'SYNCHRONIZING TARGET...'}
+          <h2 style={{ fontSize: '1.4rem' }}>
+            {isPicking ? 'TALLYING VOTES...' : 'SYNCHRONIZING TARGET...'}
           </h2>
         </div>
       )}
 
       {/* Main Grid: Standings + Leader Controls */}
-      <div className="landing-grid" style={{ gridTemplateColumns: '1.4fr 0.6fr', gap: '20px' }}>
+      <div className="landing-grid" style={{ gridTemplateColumns: '1.45fr 0.55fr', gap: '20px' }}>
         {/* Left Column: Destination Standings */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div className="panel-card">
+          <div className="panel-card standings-panel-card">
             <div className="panel-header">
               <div>
-                <div className="label-caps">[VOTE TOTALS]</div>
-                <h2>DESTINATION STANDINGS</h2>
+                <div className="label-caps gold-label">STANDINGS</div>
+                <h2>FINAL RESULTS</h2>
               </div>
-              <span className="label-caps" style={{ color: 'var(--gold)' }}>
-                {votes.length} VOTES RECORDED
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <button
+                  ref={recentClearsButtonRef}
+                  type="button"
+                  className="btn btn-sm recent-clears-trigger"
+                  onClick={() => setShowRecentClearsModal((prev) => !prev)}
+                  title="Manage recent cleared destinations"
+                >
+                  RECENT CLEARS
+                </button>
+                <span className="label-caps gold-label">
+                  {votes.length} VOTES RECORDED
+                </span>
+              </div>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              {/* Header row */}
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '2fr 0.8fr 1fr',
-                  padding: '6px 12px',
-                  fontSize: '0.72rem',
-                  color: 'var(--text-subtle)',
-                  fontFamily: 'var(--font-condensed)',
-                  letterSpacing: '0.08em',
-                  borderBottom: 'var(--border-width) solid var(--border)',
-                }}
-              >
+              {/* Standings Table Header */}
+              <div className="standings-table-header">
                 <span>DESTINATION</span>
                 <span style={{ textAlign: 'center' }}>VOTES</span>
-                <span style={{ textAlign: 'right' }}>CHANCE</span>
+                <span style={{ textAlign: 'right' }}>RESULT</span>
               </div>
 
               {/* Eligible Raids */}
-              {eligibleRaids.map((r) => {
-                const raidVotes = votes.filter((v) => v.raid_id.toLowerCase() === r.id.toLowerCase());
-                const voteTotal = raidVotes.reduce((sum, v) => sum + (v.score || 0), 0);
-                const weight = weights[r.id] || 0;
-                const pct = totalWeight > 0 ? ((weight / totalWeight) * 100).toFixed(1) : '0';
+              {sortedEligibleRaids.map((r, index) => {
+                const rawVoteTotal = getRawVotesForRaid(r.id);
                 const isSelected = pickedRaid?.id === r.id;
+                const isRecent = isRecentHistoryRaid(r.id);
 
                 return (
                   <div
                     key={r.id}
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: '2fr 0.8fr 1fr',
-                      alignItems: 'center',
-                      padding: '10px 12px',
-                      backgroundColor: isSelected ? 'var(--bg-panel)' : 'var(--bg-input)',
-                      border: 'var(--border-width) solid',
-                      borderColor: isSelected ? 'var(--gold)' : 'var(--border)',
-                      borderRadius: 'var(--radius)',
-                    }}
+                    className={`standings-row ${isSelected ? 'is-selected-standing' : ''}`}
                   >
-                    <div>
-                      <div
-                        style={{
-                          fontFamily: 'var(--font-condensed)',
-                          fontWeight: 700,
-                          fontSize: '0.95rem',
-                          color: isSelected ? 'var(--gold)' : 'var(--text-main)',
-                        }}
-                      >
-                        {r.name}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div>
+                        <div className="standing-name">
+                          {r.name}
+                          {isSelected && <span className="standing-won-tag">TARGET</span>}
+                          {isRecent && (
+                            <span
+                              className="standing-recent-penalty-tag tag-clickable recent-clears-trigger"
+                              onClick={() => setShowRecentClearsModal((prev) => !prev)}
+                              title="Recent clear deduction. Click to manage recent clears."
+                              style={{ cursor: 'pointer' }}
+                            >
+                              -3 RECENT
+                            </span>
+                          )}
+                        </div>
+                        <div className="standing-location">
+                          {r.location || 'DESTINATION'}
+                        </div>
                       </div>
                     </div>
 
-                    <div
-                      style={{
-                        textAlign: 'center',
-                        fontFamily: 'var(--font-condensed)',
-                        fontWeight: 600,
-                        fontSize: '0.9rem',
-                        color: 'var(--text-muted)',
-                      }}
-                    >
-                      {voteTotal}
+                    <div className="standing-votes">
+                      {rawVoteTotal}
                     </div>
 
                     <div style={{ textAlign: 'right' }}>
-                      <span
-                        className="tag"
-                        style={{
-                          borderColor: isSelected ? 'var(--gold)' : 'var(--border)',
-                          color: isSelected ? 'var(--gold)' : 'var(--text-muted)',
-                          fontSize: '0.8rem',
-                        }}
-                      >
-                        {pct}%
+                      <span className={`tag ${isSelected ? 'tag-gold' : ''}`}>
+                        {isSelected ? 'WINNER' : `#${index + 1}`}
                       </span>
                     </div>
                   </div>
@@ -440,42 +377,23 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
                 const player = players.find((p) => p.id === vetoCast?.player_id);
 
                 return (
-                  <div
-                    key={vId}
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: '2fr 0.8fr 1fr',
-                      alignItems: 'center',
-                      padding: '8px 12px',
-                      backgroundColor: 'var(--bg-deep)',
-                      border: 'var(--border-width) solid var(--border)',
-                      borderRadius: 'var(--radius)',
-                      opacity: 0.65,
-                    }}
-                  >
-                    <div>
-                      <div
-                        style={{
-                          fontFamily: 'var(--font-condensed)',
-                          fontWeight: 600,
-                          fontSize: '0.9rem',
-                          color: 'var(--text-subtle)',
-                        }}
-                      >
-                        {raid?.name || vId}
-                      </div>
-                      <div style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>
-                        Vetoed by {player?.name || 'Guardian'}
+                  <div key={vId} className="standings-row standing-vetoed-row">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div>
+                        <div className="standing-name" style={{ color: 'var(--text-subtle)' }}>
+                          {raid?.name || vId}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
+                          Vetoed by {player?.name || 'Guardian'}
+                        </div>
                       </div>
                     </div>
 
-                    <div style={{ textAlign: 'center', color: 'var(--text-subtle)', fontSize: '0.85rem' }}>
-                      —
-                    </div>
+                    <div style={{ textAlign: 'center', color: 'var(--text-subtle)' }}>—</div>
 
                     <div style={{ textAlign: 'right' }}>
-                      <span className="tag" style={{ borderColor: 'var(--border-strong)', color: 'var(--text-subtle)' }}>
-                        [VETOED]
+                      <span className="tag tag-vetoed">
+                        VETOED
                       </span>
                     </div>
                   </div>
@@ -485,30 +403,25 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
           </div>
         </div>
 
-        {/* Right Column: Controls */}
+        {/* Right Column: Leader Controls & Status */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {currentPlayer.is_host ? (
             <div className="panel-card" style={{ borderColor: 'var(--border-strong)' }}>
-              <div className="label-caps" style={{ marginBottom: '8px' }}>FIRETEAM LEADER CONTROLS</div>
+              <div className="label-caps gold-label" style={{ marginBottom: '12px' }}>
+                LEADER CONTROLS
+              </div>
+
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <button
                   type="button"
                   className="btn btn-primary"
-                  style={{ width: '100%' }}
-                  onClick={handleReroll}
-                  disabled={isPicking || isLoading}
-                >
-                  {isPicking ? 'ROLLING TARGET...' : 'REROLL TARGET'}
-                </button>
-                <button
-                  type="button"
-                  className="btn"
                   style={{ width: '100%' }}
                   onClick={onResetToVoting}
                   disabled={isLoading || isPicking}
                 >
                   REVOTE (RESET BALLOTS)
                 </button>
+
                 <button
                   type="button"
                   className="btn btn-sm"
@@ -518,6 +431,7 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
                 >
                   RETURN TO LOBBY
                 </button>
+
                 {onDisbandRoom && (
                   <button
                     type="button"
@@ -526,27 +440,39 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
                       width: '100%',
                       borderColor: 'var(--border-strong)',
                       color: 'var(--text-muted)',
-                      marginTop: '4px',
+                      marginTop: '6px',
                     }}
                     onClick={onDisbandRoom}
                     disabled={isLoading || isPicking}
-                    title="Immediately kill and delete this room from the database"
+                    title="Disband room and terminate fireteam session"
                   >
-                    KILL ROOM (DISBAND)
+                    DISBAND ROOM
                   </button>
                 )}
               </div>
             </div>
           ) : (
-            <div className="panel-card" style={{ borderColor: 'var(--border)' }}>
-              <div className="label-caps" style={{ marginBottom: '8px' }}>FIRETEAM STATUS</div>
+            <div className="panel-card">
+              <div className="label-caps gold-label" style={{ marginBottom: '8px' }}>
+                STATUS
+              </div>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem', lineHeight: '1.4' }}>
-                Target assigned. Awaiting orders from Fireteam Leader.
+                Destination selected. Awaiting host to revote or return to lobby.
               </p>
             </div>
           )}
         </div>
       </div>
+
+      {/* Recent Clears Hover Panel */}
+      <RecentClearsModal
+        isOpen={showRecentClearsModal}
+        onClose={() => setShowRecentClearsModal(false)}
+        roomId={room.id}
+        history={history}
+        onHistoryChange={(newH) => setHistory(newH)}
+        panelRef={recentClearsPanelRef}
+      />
     </div>
   );
 };

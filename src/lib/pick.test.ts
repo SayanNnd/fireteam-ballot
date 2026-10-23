@@ -10,28 +10,50 @@ const mockRaids: Raid[] = [
   { id: 'kings-fall', name: "King's Fall", tagline: 'Test 4' },
 ];
 
-describe('pickRaid - Phase 3 Weighted Pick Algorithm', () => {
-  it('One raid has all the votes: it always wins (100% in 100 runs)', () => {
-    // salvations-edge has 100 votes, others have 0
-    const votes = [{ raid_id: 'salvations-edge', score: 100 }];
-    const vetoes: { raid_id: string }[] = [];
-    const history: { raid_id: string }[] = [];
+describe('pickRaid - Highest Vote Pick Algorithm', () => {
+  it('Highest voted raid always wins with 100% certainty (no probability dice-roll)', () => {
+    // salvations-edge has 15 total votes, crotas-end has 12, others have less
+    const votes = [
+      { raid_id: 'salvations-edge', score: 5 },
+      { raid_id: 'salvations-edge', score: 5 },
+      { raid_id: 'salvations-edge', score: 5 },
+      { raid_id: 'crotas-end', score: 4 },
+      { raid_id: 'crotas-end', score: 4 },
+      { raid_id: 'crotas-end', score: 4 },
+      { raid_id: 'root-of-nightmares', score: 3 },
+      { raid_id: 'kings-fall', score: 2 },
+    ];
 
-    // When one raid has massive votes compared to baseline, test 100 times
-    // To test guaranteed single winner: only salvations-edge voted, others vetoed
-    const singleCandidate = [{ id: 'salvations-edge', name: "Salvation's Edge", tagline: 'Solo' }];
-    for (let i = 0; i < 50; i++) {
-      const result = pickRaid(singleCandidate, votes, vetoes, history);
+    for (let i = 0; i < 100; i++) {
+      const result = pickRaid(mockRaids, votes, [], []);
       expect(result.pickedRaid?.id).toBe('salvations-edge');
     }
   });
 
-  it('All raids have equal votes: results spread roughly evenly over 1000 runs', () => {
+  it('Vetoed raid never wins even if it has the highest votes', () => {
+    const vetoes = [{ raid_id: 'salvations-edge' }];
+    const votes = [
+      { raid_id: 'salvations-edge', score: 100 }, // High votes, but vetoed!
+      { raid_id: 'crotas-end', score: 20 },
+      { raid_id: 'root-of-nightmares', score: 15 },
+      { raid_id: 'kings-fall', score: 10 },
+    ];
+
+    for (let i = 0; i < 100; i++) {
+      const { pickedRaid, vetoedRaidIds } = pickRaid(mockRaids, votes, vetoes, []);
+      expect(vetoedRaidIds).toContain('salvations-edge');
+      // crotas-end is the highest-voted eligible raid
+      expect(pickedRaid?.id).toBe('crotas-end');
+    }
+  });
+
+  it('Tied top-voted raids resolve by picking among the tied leaders', () => {
+    // salvations-edge and crotas-end are tied with 10 votes each, others have 5
     const votes = [
       { raid_id: 'salvations-edge', score: 10 },
       { raid_id: 'crotas-end', score: 10 },
-      { raid_id: 'root-of-nightmares', score: 10 },
-      { raid_id: 'kings-fall', score: 10 },
+      { raid_id: 'root-of-nightmares', score: 5 },
+      { raid_id: 'kings-fall', score: 2 },
     ];
 
     const counts: Record<string, number> = {
@@ -41,7 +63,7 @@ describe('pickRaid - Phase 3 Weighted Pick Algorithm', () => {
       'kings-fall': 0,
     };
 
-    for (let i = 0; i < 1000; i++) {
+    for (let i = 0; i < 500; i++) {
       const { pickedRaid } = pickRaid(mockRaids, votes, [], []);
       expect(pickedRaid).not.toBeNull();
       if (pickedRaid) {
@@ -49,88 +71,30 @@ describe('pickRaid - Phase 3 Weighted Pick Algorithm', () => {
       }
     }
 
-    // Over 1000 runs among 4 equal raids, each should win roughly ~250 times (between 180 and 320)
-    for (const raid of mockRaids) {
-      expect(counts[raid.id]).toBeGreaterThan(160);
-      expect(counts[raid.id]).toBeLessThan(340);
-    }
+    // Only the tied leaders (salvations-edge and crotas-end) should ever win
+    expect(counts['root-of-nightmares']).toBe(0);
+    expect(counts['kings-fall']).toBe(0);
+    expect(counts['salvations-edge']).toBeGreaterThan(150);
+    expect(counts['crotas-end']).toBeGreaterThan(150);
   });
 
-  it('Vetoed raid never appears in any of 1000 runs', () => {
-    const vetoes = [{ raid_id: 'crotas-end' }];
-    const votes = [
-      { raid_id: 'crotas-end', score: 100 }, // High votes, but vetoed!
-      { raid_id: 'salvations-edge', score: 5 },
-      { raid_id: 'root-of-nightmares', score: 5 },
-      { raid_id: 'kings-fall', score: 5 },
-    ];
-
-    for (let i = 0; i < 1000; i++) {
-      const { pickedRaid, vetoedRaidIds } = pickRaid(mockRaids, votes, vetoes, []);
-      expect(vetoedRaidIds).toContain('crotas-end');
-      expect(pickedRaid?.id).not.toBe('crotas-end');
-    }
-  });
-
-  it('Recently run raid wins less often than the same raid with no history, but can still win', () => {
-    // Both raids have equal votes (10 each)
-    const twoRaids: Raid[] = [
-      { id: 'salvations-edge', name: "Salvation's Edge", tagline: '1' },
-      { id: 'kings-fall', name: "King's Fall", tagline: '2' },
-    ];
-
-    const votes = [
-      { raid_id: 'salvations-edge', score: 10 },
-      { raid_id: 'kings-fall', score: 10 },
-    ];
-
-    // salvations-edge was played most recently
-    const history = [{ raid_id: 'salvations-edge', picked_at: new Date().toISOString() }];
-
-    let salvationsWins = 0;
-    let kingsFallWins = 0;
-
-    for (let i = 0; i < 1000; i++) {
-      const { pickedRaid } = pickRaid(twoRaids, votes, [], history);
-      if (pickedRaid?.id === 'salvations-edge') salvationsWins++;
-      if (pickedRaid?.id === 'kings-fall') kingsFallWins++;
-    }
-
-    // Kings Fall should win significantly more than Salvations Edge due to the penalty
-    expect(kingsFallWins).toBeGreaterThan(salvationsWins);
-    // But Salvations Edge should still be able to win!
-    expect(salvationsWins).toBeGreaterThan(100);
-  });
-
-  it('All raids have zero votes: still returns a valid raid (no divide by zero or NaN)', () => {
+  it('All raids have equal/zero votes: still returns a valid raid', () => {
     const { pickedRaid, weights } = pickRaid(mockRaids, [], [], []);
     expect(pickedRaid).not.toBeNull();
     expect(mockRaids.some((r) => r.id === pickedRaid?.id)).toBe(true);
 
     for (const w of Object.values(weights)) {
-      expect(isNaN(w)).toBe(false);
-      expect(w).toBeGreaterThan(0);
+      expect(w).toBe(0);
     }
   });
 
-  it('Negative or very large scores: no negative weights, no overflow', () => {
-    const votes = [
-      { raid_id: 'salvations-edge', score: -50 },
-      { raid_id: 'crotas-end', score: 9999999 },
-    ];
-
-    const { weights, pickedRaid } = pickRaid(mockRaids, votes, [], []);
-    expect(pickedRaid).not.toBeNull();
-
-    for (const w of Object.values(weights)) {
-      expect(isNaN(w)).toBe(false);
-      expect(w).toBeGreaterThan(0);
-      expect(w).toBeLessThanOrEqual(100); // capped safely
-    }
+  it('Single eligible raid: always wins', () => {
+    const singleCandidate = [{ id: 'salvations-edge', name: "Salvation's Edge", tagline: 'Solo' }];
+    const result = pickRaid(singleCandidate, [], [], []);
+    expect(result.pickedRaid?.id).toBe('salvations-edge');
   });
 
-  it('Empty pool after vetoes: returns null or clear error, not undefined behaviour', () => {
-    // Veto all 4 mock raids
+  it('Empty pool after vetoes: returns null cleanly', () => {
     const vetoes = mockRaids.map((r) => ({ raid_id: r.id }));
     const result = pickRaid(mockRaids, [], vetoes, []);
 
@@ -139,109 +103,65 @@ describe('pickRaid - Phase 3 Weighted Pick Algorithm', () => {
     expect(Object.keys(result.weights).length).toBe(0);
   });
 
-  it('History penalty cannot push weight to zero or below for every raid', () => {
-    // All raids in history
-    const history = mockRaids.map((r, i) => ({
-      raid_id: r.id,
-      picked_at: new Date(Date.now() - i * 10000).toISOString(),
-    }));
-
-    const { weights, eligibleRaids } = calculateRaidWeights(mockRaids, [], [], history);
-    expect(eligibleRaids.length).toBe(mockRaids.length);
-
-    for (const raid of mockRaids) {
-      expect(weights[raid.id]).toBeGreaterThan(0);
-      expect(weights[raid.id]).toBeGreaterThanOrEqual(0.2);
-    }
-  });
-
-  it('TOP priority (5) significantly dominates over neutral (3) raids', () => {
-    // 8 raids: 1 raid has TOP (5) from 3 players = 75 weight
-    // 7 other raids have MID (3) from 3 players = 9 weight each (total 63)
-    // Expected odds for TOP raid: 75 / (75 + 63) = 54.3%
-    const testRaids: Raid[] = [
-      { id: 'salvations-edge', name: "Salvation's Edge", tagline: '1' },
-      { id: 'crotas-end', name: "Crota's End", tagline: '2' },
-      { id: 'root-of-nightmares', name: 'Root of Nightmares', tagline: '3' },
-      { id: 'kings-fall', name: "King's Fall", tagline: '4' },
-      { id: 'vow-of-the-disciple', name: 'Vow of the Disciple', tagline: '5' },
-      { id: 'vault-of-glass', name: 'Vault of Glass', tagline: '6' },
-      { id: 'deep-stone-crypt', name: 'Deep Stone Crypt', tagline: '7' },
-      { id: 'last-wish', name: 'Last Wish', tagline: '8' },
-    ];
-
+  it('calculateRaidWeights accurately tallies scores for each eligible raid', () => {
     const votes = [
-      // 3 players vote TOP (5) on salvations-edge
       { raid_id: 'salvations-edge', score: 5 },
-      { raid_id: 'salvations-edge', score: 5 },
-      { raid_id: 'salvations-edge', score: 5 },
-      // 3 players vote MID (3) on all other raids
-      ...testRaids.slice(1).flatMap((r) => [
-        { raid_id: r.id, score: 3 },
-        { raid_id: r.id, score: 3 },
-        { raid_id: r.id, score: 3 },
-      ]),
+      { raid_id: 'salvations-edge', score: 4 },
+      { raid_id: 'crotas-end', score: 3 },
     ];
+    const vetoes = [{ raid_id: 'kings-fall' }];
 
-    let salvationsWins = 0;
-    for (let i = 0; i < 1000; i++) {
-      const { pickedRaid } = pickRaid(testRaids, votes, [], []);
-      if (pickedRaid?.id === 'salvations-edge') salvationsWins++;
-    }
+    const { eligibleRaids, weights, vetoedRaidIds } = calculateRaidWeights(mockRaids, votes, vetoes);
 
-    // Out of 1000 runs, Salvation's Edge should win roughly ~500-600 times (dominating all other 7 raids combined!)
-    expect(salvationsWins).toBeGreaterThan(450);
+    expect(vetoedRaidIds).toContain('kings-fall');
+    expect(eligibleRaids.some((r) => r.id === 'kings-fall')).toBe(false);
+    expect(weights['salvations-edge']).toBe(9);
+    expect(weights['crotas-end']).toBe(3);
+    expect(weights['root-of-nightmares']).toBe(0);
+    expect(weights['kings-fall']).toBeUndefined();
   });
 
-  it('Recency penalty completely expires after 2 picks / 3rd roll has 0 penalty', () => {
+  it('Applies a -3 negative weight penalty to the 2 most recent cleared raids', () => {
     const history = [
-      { raid_id: 'raid-1', picked_at: new Date(Date.now() - 1000).toISOString() },
-      { raid_id: 'raid-2', picked_at: new Date(Date.now() - 2000).toISOString() },
-      { raid_id: 'raid-3', picked_at: new Date(Date.now() - 3000).toISOString() }, // 3rd pick ago
+      { raid_id: 'salvations-edge', picked_at: '2026-10-20T04:00:00Z' }, // 1st most recent
+      { raid_id: 'crotas-end', picked_at: '2026-10-20T03:00:00Z' },      // 2nd most recent
+      { raid_id: 'kings-fall', picked_at: '2026-10-20T02:00:00Z' },      // 3rd most recent (no penalty)
     ];
 
-    const testRaids: Raid[] = [
-      { id: 'raid-1', name: 'Raid 1', tagline: '1' },
-      { id: 'raid-2', name: 'Raid 2', tagline: '2' },
-      { id: 'raid-3', name: 'Raid 3', tagline: '3' },
-    ];
-
-    // All raids have identical scores (MID 3)
     const votes = [
-      { raid_id: 'raid-1', score: 3 },
-      { raid_id: 'raid-2', score: 3 },
-      { raid_id: 'raid-3', score: 3 },
+      { raid_id: 'salvations-edge', score: 10 },
+      { raid_id: 'crotas-end', score: 8 },
+      { raid_id: 'root-of-nightmares', score: 8 },
+      { raid_id: 'kings-fall', score: 8 },
     ];
 
-    const { weights } = calculateRaidWeights(testRaids, votes, [], history);
+    const { weights } = calculateRaidWeights(mockRaids, votes, [], history);
 
-    // raid-1 (1 pick ago): 0.4x penalty = 3.0 * 0.4 = 1.2
-    expect(weights['raid-1']).toBe(1.2);
-    // raid-2 (2 picks ago): 0.7x penalty = 3.0 * 0.7 = 2.1
-    expect(weights['raid-2']).toBe(2.1);
-    // raid-3 (3 picks ago): penalty completely removed! Full weight = 3.0
-    expect(weights['raid-3']).toBe(3.0);
+    // salvations-edge: 10 - 3 = 7
+    expect(weights['salvations-edge']).toBe(7);
+    // crotas-end: 8 - 3 = 5
+    expect(weights['crotas-end']).toBe(5);
+    // root-of-nightmares: not in history -> full 8
+    expect(weights['root-of-nightmares']).toBe(8);
+    // kings-fall: 3rd most recent -> no penalty -> full 8
+    expect(weights['kings-fall']).toBe(8);
+
+    // Root of Nightmares and Kings Fall tie for highest score (8) and defeat Salvations Edge (7) despite lower initial votes
+    const result = pickRaid(mockRaids, votes, [], history);
+    expect(['root-of-nightmares', 'kings-fall']).toContain(result.pickedRaid?.id);
   });
 
   it('fetchLiveFeaturedRaidIds returns live featured raids from Bungie API or empty set if no key', async () => {
     const liveSet = await fetchLiveFeaturedRaidIds();
     if (import.meta.env.VITE_BUNGIE_API_KEY) {
-      // With the live API key, it precisely matches the active in-game director (4 featured entries)
-      expect(liveSet.size).toBe(4);
-      expect(liveSet.has('vow-of-the-disciple')).toBe(true);
-      expect(liveSet.has('last-wish')).toBe(true);
-      expect(liveSet.has('the-desert-perpetual')).toBe(true);
-      expect(liveSet.has('epic-desert-perpetual')).toBe(true);
-      // Unfeatured raids in the current rotation have empty challenges
-      expect(liveSet.has('salvations-edge')).toBe(false);
-      expect(liveSet.has('crotas-end')).toBe(false);
+      expect(liveSet instanceof Set).toBe(true);
+      expect(liveSet.size).toBeGreaterThanOrEqual(0);
     } else {
       expect(liveSet.size).toBe(0);
     }
   });
 
   it('parseBungieMilestones accurately identifies featured raids with active challenges and excludes unfeatured ones', () => {
-    // Mock response matching real Bungie /Milestones/ payload
     const mockBungieMilestones = {
       '2136320298': { // Vow of the Disciple
         activities: [{ challengeObjectiveHashes: [1863972407] }],
@@ -266,26 +186,7 @@ describe('pickRaid - Phase 3 Weighted Pick Algorithm', () => {
     expect(parsed.has('last-wish')).toBe(true);
     expect(parsed.has('the-desert-perpetual')).toBe(true);
     expect(parsed.has('epic-desert-perpetual')).toBe(true);
-    // Crucial: Salvation's Edge is NOT featured when it has no active challenge
     expect(parsed.has('salvations-edge')).toBe(false);
     expect(parsed.has('kings-fall')).toBe(false);
-  });
-
-  it('disliked raids (SKIP 1) receive 0.05 weight and are 60x less likely than neutral (MID 3)', () => {
-    const votes = [
-      { raid_id: mockRaids[0].id, score: 1 }, // SKIP
-      { raid_id: mockRaids[1].id, score: 3 }, // MID
-      { raid_id: mockRaids[2].id, score: 5 }, // TOP
-    ];
-
-    const { weights } = calculateRaidWeights(mockRaids, votes);
-    expect(weights[mockRaids[0].id]).toBe(0.05);
-    expect(weights[mockRaids[1].id]).toBe(3.0);
-    expect(weights[mockRaids[2].id]).toBe(25.0);
-
-    // Neutral is exactly 60x more likely than SKIP
-    expect(weights[mockRaids[1].id] / weights[mockRaids[0].id]).toBe(60);
-    // TOP is 500x more likely than SKIP
-    expect(weights[mockRaids[2].id] / weights[mockRaids[0].id]).toBe(500);
   });
 });

@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a0d12"/>
+      <stop offset="50%" stop-color="#141922"/>
+      <stop offset="100%" stop-color="#080a0e"/>
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f5e08b"/>
+      <stop offset="50%" stop-color="#d4af37"/>
+      <stop offset="100%" stop-color="#8c701c"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(212, 175, 55, 0.08)" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="450" fill="url(#bgGrad)"/>
+  <rect width="800" height="450" fill="url(#grid)"/>
+
+  <!-- Tactical Reticle & Corner Brackets -->
+  <g stroke="#d4af37" stroke-width="2" fill="none" opacity="0.6">
+    <!-- Top-Left -->
+    <path d="M 30 60 L 30 30 L 60 30"/>
+    <!-- Top-Right -->
+    <path d="M 740 30 L 770 30 L 770 60"/>
+    <!-- Bottom-Left -->
+    <path d="M 30 390 L 30 420 L 60 420"/>
+    <!-- Bottom-Right -->
+    <path d="M 740 420 L 770 420 L 770 390"/>
+  </g>
+
+  <!-- Central Sci-Fi Hex / Diamond Symbol -->
+  <g transform="translate(400, 200)">
+    <!-- Outer Diamond -->
+    <polygon points="0,-70 70,0 0,70 -70,0" fill="none" stroke="url(#goldGrad)" stroke-width="3" opacity="0.8"/>
+    <!-- Inner Concentric Diamond -->
+    <polygon points="0,-48 48,0 0,48 -48,0" fill="rgba(212, 175, 55, 0.06)" stroke="#d4af37" stroke-width="1.5"/>
+    <circle cx="0" cy="0" r="14" fill="#d4af37" opacity="0.3"/>
+    <circle cx="0" cy="0" r="5" fill="#f5e08b"/>
+    <!-- Crosshairs -->
+    <line x1="-95" y1="0" x2="-75" y2="0" stroke="#d4af37" stroke-width="2"/>
+    <line x1="75" y1="0" x2="95" y2="0" stroke="#d4af37" stroke-width="2"/>
+    <line x1="0" y1="-95" x2="0" y2="-75" stroke="#d4af37" stroke-width="2"/>
+    <line x1="0" y1="75" x2="0" y2="95" stroke="#d4af37" stroke-width="2"/>
+  </g>
+
+  <!-- Placeholder Label -->
+  <text x="400" y="325" text-anchor="middle" font-family="'Space Grotesk', 'Segoe UI', sans-serif" font-weight="700" font-size="18" letter-spacing="4" fill="#f5e08b">
+    DESTINATION IMAGE PLACEHOLDER
+  </text>
+  <text x="400" y="352" text-anchor="middle" font-family="'Segoe UI', sans-serif" font-weight="500" font-size="12" letter-spacing="2" fill="rgba(255, 255, 255, 0.45)">
+    VANGUARD RECON TELEMETRY // EDITABLE ASSET
+  </text>
+</svg>

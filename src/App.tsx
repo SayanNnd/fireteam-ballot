@@ -41,6 +41,7 @@ export function App() {
   );
   const [error, setError] = useState<string | null>(null);
   const [onlinePlayerIds, setOnlinePlayerIds] = useState<Set<string>>(new Set());
+  const [showDisbandModal, setShowDisbandModal] = useState(false);
 
   const channelRef = useRef<RealtimeChannel | null>(null);
   const currentPlayerRef = useRef<Player | null>(null);
@@ -56,6 +57,11 @@ export function App() {
   useEffect(() => {
     fetchLiveFeaturedRaidIds();
   }, []);
+
+  // Scroll to top whenever the view changes (lobby ↔ voting ↔ revealed)
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [room?.status]);
 
   // Fetch all players currently in the room
   const fetchRoomPlayers = useCallback(async (roomId: string) => {
@@ -860,10 +866,12 @@ export function App() {
   // Action: Host Disbands / Kills Room
   const handleDisbandRoom = async () => {
     if (!room || !currentPlayer?.is_host) return;
+    setShowDisbandModal(true);
+  };
 
-    if (!window.confirm('Are you sure you want to kill and disband this room? All data will be deleted.')) {
-      return;
-    }
+  const confirmDisbandRoom = async () => {
+    if (!room || !currentPlayer?.is_host) return;
+    setShowDisbandModal(false);
 
     try {
       channelRef.current?.send({
@@ -879,7 +887,7 @@ export function App() {
     setRoom(null);
     setCurrentPlayer(null);
     setPlayers([]);
-    setError('Fireteam room killed and disbanded.');
+    setError('Fireteam room closed and disbanded.');
   };
 
   // Action: Lock In Ballot and Veto
@@ -1090,27 +1098,34 @@ export function App() {
       />
 
       <main style={{ flex: 1 }}>
-        {!isSupabaseConfigured && <SetupBanner />}
+        {!isSupabaseConfigured && (
+          <div className="app-inner">
+            <SetupBanner />
+          </div>
+        )}
 
         {isRestoringSession ? (
-          <div
-            className="panel-card"
-            style={{
-              maxWidth: '460px',
-              margin: '80px auto',
-              textAlign: 'center',
-              borderColor: 'var(--border-strong)',
-            }}
-          >
-            <div className="label-caps" style={{ color: 'var(--gold)', marginBottom: '10px' }}>
-              [SYS] RESTORING FIRETEAM FREQUENCY
+          <div className="app-inner">
+            <div
+              className="panel-card"
+              style={{
+                maxWidth: '460px',
+                margin: '80px auto',
+                textAlign: 'center',
+                borderColor: 'var(--border-strong)',
+              }}
+            >
+              <div className="label-caps" style={{ color: 'var(--gold)', marginBottom: '10px' }}>
+                [SYS] RESTORING FIRETEAM FREQUENCY
+              </div>
+              <h2 style={{ fontSize: '1.35rem', marginBottom: '8px' }}>RECONNECTING SESSION</h2>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                Reconnecting to fireteam session...
+              </p>
             </div>
-            <h2 style={{ fontSize: '1.35rem', marginBottom: '8px' }}>RECONNECTING SESSION</h2>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-              Reconnecting to fireteam session...
-            </p>
           </div>
         ) : !room || !currentPlayer ? (
+          /* Full-bleed hero — no app-inner wrapper */
           <LandingView
             onCreateRoom={handleCreateRoom}
             onJoinRoom={handleJoinRoom}
@@ -1118,6 +1133,7 @@ export function App() {
             error={error}
           />
         ) : room.status === 'lobby' ? (
+          /* Full-bleed hero — no app-inner wrapper */
           <LobbyView
             room={room}
             players={players}
@@ -1129,32 +1145,95 @@ export function App() {
             isLoading={isLoading}
           />
         ) : room.status === 'voting' ? (
-          <VotingView
-            room={room}
-            players={players}
-            currentPlayer={currentPlayer}
-            onlinePlayerIds={onlinePlayerIds}
-            onLockIn={handleLockIn}
-            onForceAdvance={handleForceAdvance}
-            onReturnToLobby={handleReturnToLobby}
-            onKickPlayer={handleKickPlayer}
-            onDisbandRoom={handleDisbandRoom}
-            isLoading={isLoading}
-          />
+          <div style={{
+              backgroundImage: 'linear-gradient(rgba(6,10,16,0.8) 0%, rgba(6,10,16,0.9) 100%), url(/raid.jpg)',
+              backgroundSize: 'cover',
+              backgroundPosition: 'center top',
+              backgroundAttachment: 'scroll',
+              minHeight: 'calc(100vh - 56px)',
+              width: '100%',
+            }}>
+            <div className="app-inner">
+              <VotingView
+                room={room}
+                players={players}
+                currentPlayer={currentPlayer}
+                onlinePlayerIds={onlinePlayerIds}
+                onLockIn={handleLockIn}
+                onForceAdvance={handleForceAdvance}
+                onReturnToLobby={handleReturnToLobby}
+                onKickPlayer={handleKickPlayer}
+                onDisbandRoom={handleDisbandRoom}
+                isLoading={isLoading}
+              />
+            </div>
+          </div>
         ) : (
-          <RevealedView
-            room={room}
-            players={players}
-            currentPlayer={currentPlayer}
-            onlinePlayerIds={onlinePlayerIds}
-            onResetToVoting={handleResetToVoting}
-            onReturnToLobby={handleReturnToLobby}
-            onDisbandRoom={handleDisbandRoom}
-            onPickDetermined={handlePickDetermined}
-            isLoading={isLoading}
-          />
+          <div style={{
+              backgroundImage: 'linear-gradient(rgba(6,10,16,0.8) 0%, rgba(6,10,16,0.9) 100%), url(/raid.jpg)',
+              backgroundSize: 'cover',
+              backgroundPosition: 'center top',
+              backgroundAttachment: 'scroll',
+              minHeight: 'calc(100vh - 56px)',
+              width: '100%',
+            }}>
+            <div className="app-inner">
+              <RevealedView
+                room={room}
+                players={players}
+                currentPlayer={currentPlayer}
+                onlinePlayerIds={onlinePlayerIds}
+                onResetToVoting={handleResetToVoting}
+                onReturnToLobby={handleReturnToLobby}
+                onDisbandRoom={handleDisbandRoom}
+                onPickDetermined={handlePickDetermined}
+                isLoading={isLoading}
+              />
+            </div>
+          </div>
         )}
+
       </main>
+
+      {/* Disband Room Confirmation Modal */}
+      {showDisbandModal && (
+        <div className="modal-backdrop" onClick={() => setShowDisbandModal(false)}>
+          <div
+            className="modal-content"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '480px', borderColor: 'var(--crimson-border)', textAlign: 'center' }}
+          >
+            <div style={{ fontSize: '2.4rem', marginBottom: '12px' }}>⚠</div>
+            <div className="label-caps" style={{ color: 'var(--crimson)', letterSpacing: '0.14em', marginBottom: '8px' }}>
+              DESTRUCTIVE ACTION
+            </div>
+            <h2 style={{ fontSize: '1.5rem', marginBottom: '12px', color: 'var(--text-main)' }}>
+              DISBAND FIRETEAM ROOM?
+            </h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.92rem', marginBottom: '28px', lineHeight: 1.6 }}>
+              All active ballots will be permanently deleted and all connected fireteam members will be disconnected from the session.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '12px' }}>
+              <button
+                type="button"
+                className="btn btn-sm"
+                style={{ minWidth: '120px' }}
+                onClick={() => setShowDisbandModal(false)}
+              >
+                CANCEL
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                style={{ minWidth: '140px', backgroundColor: 'var(--crimson)', borderColor: 'var(--crimson)', color: '#fff', fontWeight: 800 }}
+                onClick={confirmDisbandRoom}
+              >
+                DISBAND ROOM
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

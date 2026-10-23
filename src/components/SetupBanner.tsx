@@ -4,7 +4,7 @@ export const SetupBanner: React.FC = () => {
   return (
     <div className="setup-alert">
       <div className="label-caps" style={{ color: 'var(--gold)', marginBottom: '4px' }}>
-        [SYS] CONFIGURATION REQUIRED
+        CONFIGURATION REQUIRED
       </div>
       <h3 className="setup-title">SUPABASE CREDENTIALS MISSING</h3>
       <p style={{ fontSize: '0.88rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
