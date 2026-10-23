@@ -74,7 +74,7 @@ export const VotingView: React.FC<VotingViewProps> = ({
 
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [showRecentClearsModal, setShowRecentClearsModal] = useState(false);
-  const [history, setHistory] = useState<{ raid_id: string; picked_at?: string }[]>([]);
+  const [history, setHistory] = useState<{ raid_id: string; picked_at: string }[]>([]);
   const recentClearsPanelRef = useRef<HTMLDivElement>(null);
   const recentClearsButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -343,7 +343,7 @@ export const VotingView: React.FC<VotingViewProps> = ({
                   }}
                 >
                   <div className="destination-card-content">
-                    {/* Top Row: Title, Badges, and Action Controls */}
+                    {/* Top Row: Title, Badges, and Score Selector */}
                     <div className="destination-card-top">
                       <div className="destination-title-area">
                         <span className="destination-num">{padIndex}</span>
@@ -353,18 +353,8 @@ export const VotingView: React.FC<VotingViewProps> = ({
                         )}
                       </div>
 
-                      {/* Right Controls: Veto + 1-5 Score Segment */}
+                      {/* Score Selector (1-5) stays on the top right */}
                       <div className="destination-actions">
-                        <button
-                          type="button"
-                          className={`veto-btn ${isVetoed ? 'veto-btn-active' : ''}`}
-                          onClick={() => handleToggleVeto(raid.id)}
-                          disabled={isLocked || isLoading}
-                          title={isVetoed ? 'Cancel Veto' : 'Veto this destination (excludes it from selection)'}
-                        >
-                          {isVetoed ? 'VETO ACTIVE' : 'VETO'}
-                        </button>
-
                         <div className="score-segmented-group" role="group" aria-label={`Score for ${raid.name}`}>
                           {[1, 2, 3, 4, 5].map((val) => {
                             const isSelected = currentScore === val && !isVetoed;
@@ -385,7 +375,7 @@ export const VotingView: React.FC<VotingViewProps> = ({
                       </div>
                     </div>
 
-                    {/* Bottom Row: Tagline, Details, and Location Meta */}
+                    {/* Bottom Row: Tagline, Details, Meta, AND Veto Button on the right */}
                     <div className="destination-card-bottom">
                       <div className="destination-desc-area">
                         <p className="destination-tagline">{raid.tagline}</p>
@@ -406,6 +396,19 @@ export const VotingView: React.FC<VotingViewProps> = ({
                             RECENT (-3)
                           </span>
                         )}
+                      </div>
+
+                      {/* Veto Button wrapper pinned to bottom right */}
+                      <div className="destination-veto-area">
+                        <button
+                          type="button"
+                          className={`veto-btn ${isVetoed ? 'veto-btn-active' : ''}`}
+                          onClick={() => handleToggleVeto(raid.id)}
+                          disabled={isLocked || isLoading}
+                          title={isVetoed ? 'Cancel Veto' : 'Veto this destination'}
+                        >
+                          {isVetoed ? 'VETO ACTIVE' : 'VETO'}
+                        </button>
                       </div>
                     </div>
                   </div>

@@ -134,7 +134,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                       flexShrink: 0,
                     }} />
                     <div>
-                      <div className="label-caps" style={{ fontSize: '0.72rem', color: 'var(--text-subtle)', marginBottom: '3px' }}>
+                      <div className="label-caps" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '3px' }}>
                         SLOT 0{index + 1}
                       </div>
                       <div style={{ fontFamily: 'var(--font-display)', fontSize: '1.35rem', fontWeight: 700, color: 'var(--text-main)' }}>
@@ -211,7 +211,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
           backdropFilter: 'blur(6px)',
         }}>
           <div>
-            <div className="label-caps" style={{ fontSize: '0.8rem', color: 'var(--text-subtle)', marginBottom: '6px' }}>STATUS</div>
+            <div className="label-caps" style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '6px' }}>STATUS</div>
             <div style={{ fontFamily: 'var(--font-condensed)', fontSize: '1.15rem', color: 'var(--text-main)', letterSpacing: '0.04em' }}>
               {isHost
                 ? <><span style={{ color: 'var(--gold)' }}>Fireteam assembled.</span> Ready to initiate private voting phase.</>

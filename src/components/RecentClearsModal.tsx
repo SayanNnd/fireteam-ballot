@@ -7,9 +7,9 @@ interface RecentClearsModalProps {
   isOpen: boolean;
   onClose: () => void;
   roomId: string;
-  history: { raid_id: string; picked_at?: string }[];
+  history: { raid_id: string; picked_at: string }[];
   onHistoryChange: (updatedHistory: { raid_id: string; picked_at: string }[]) => void;
-  panelRef?: React.RefObject<HTMLDivElement>;
+  panelRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 export const RecentClearsModal: React.FC<RecentClearsModalProps> = ({

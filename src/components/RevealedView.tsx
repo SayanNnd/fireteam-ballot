@@ -170,7 +170,7 @@ export const RevealedView: React.FC<RevealedViewProps> = ({
   const vetoInputs: VetoInput[] = vetoes.map((v) => ({ raid_id: v.raid_id }));
   const historyInputs: HistoryInput[] = history.map((h) => ({ raid_id: h.raid_id, picked_at: h.picked_at }));
 
-  const { eligibleRaids, weights, vetoedRaidIds } = calculateRaidWeights(
+  const { eligibleRaids, vetoedRaidIds } = calculateRaidWeights(
     raids,
     voteInputs,
     vetoInputs,

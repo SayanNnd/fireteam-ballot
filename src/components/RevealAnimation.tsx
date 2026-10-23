@@ -150,14 +150,6 @@ export const RevealAnimation: React.FC<RevealAnimationProps> = ({
 
   return (
     <div className="reveal-overlay-backdrop">
-      {/* Background Reticle & HUD Lines */}
-      <div className="reveal-hud-reticle">
-        <div className="hud-corner hud-corner-tl" />
-        <div className="hud-corner hud-corner-tr" />
-        <div className="hud-corner hud-corner-bl" />
-        <div className="hud-corner hud-corner-br" />
-      </div>
-
       {/* Top Status Header */}
       <div className="reveal-overlay-header">
         <div className="reveal-header-protocol">
@@ -260,12 +252,6 @@ export const RevealAnimation: React.FC<RevealAnimationProps> = ({
             </div>
           </div>
         )}
-      </div>
-
-      {/* Bottom Telemetry Ticker */}
-      <div className="reveal-footer-telemetry">
-        <span className="label-caps">Fireteam Ballot</span>
-        <span className="label-caps gold-label">Highest Vote Win</span>
       </div>
     </div>
   );

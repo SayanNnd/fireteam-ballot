@@ -1145,14 +1145,7 @@ export function App() {
             isLoading={isLoading}
           />
         ) : room.status === 'voting' ? (
-          <div style={{
-              backgroundImage: 'linear-gradient(rgba(6,10,16,0.8) 0%, rgba(6,10,16,0.9) 100%), url(/raid.jpg)',
-              backgroundSize: 'cover',
-              backgroundPosition: 'center top',
-              backgroundAttachment: 'scroll',
-              minHeight: 'calc(100vh - 56px)',
-              width: '100%',
-            }}>
+          <div className="page-bg">
             <div className="app-inner">
               <VotingView
                 room={room}
@@ -1169,14 +1162,7 @@ export function App() {
             </div>
           </div>
         ) : (
-          <div style={{
-              backgroundImage: 'linear-gradient(rgba(6,10,16,0.8) 0%, rgba(6,10,16,0.9) 100%), url(/raid.jpg)',
-              backgroundSize: 'cover',
-              backgroundPosition: 'center top',
-              backgroundAttachment: 'scroll',
-              minHeight: 'calc(100vh - 56px)',
-              width: '100%',
-            }}>
+          <div className="page-bg">
             <div className="app-inner">
               <RevealedView
                 room={room}
