@@ -23,6 +23,32 @@ export interface BungieRaidStatsResult {
 
 export type BungieNameVerificationResult = Pick<BungieNameLookupResult, 'valid' | 'displayName'>;
 
+async function readBungieEndpointResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
+  const responseText = await response.text();
+  let data: unknown;
+
+  try {
+    data = JSON.parse(responseText);
+  } catch {
+    if (!response.ok) {
+      const vercelError = response.headers.get('x-vercel-error');
+      const requestId = response.headers.get('x-vercel-id');
+      if (vercelError) {
+        throw new Error(`Bungie lookup server failed (${vercelError}${requestId ? `, ${requestId}` : ''}). Check the Vercel function logs.`);
+      }
+      throw new Error(`Bungie lookup server returned HTTP ${response.status} without a JSON response.`);
+    }
+    throw new Error('Bungie lookup server returned an invalid response.');
+  }
+
+  if (!response.ok) {
+    const message = (data as { error?: string } | null)?.error;
+    throw new Error(message || fallbackMessage);
+  }
+
+  return data as T;
+}
+
 const raidStatsCache = new Map<string, Promise<BungieRaidStatsResult>>();
 const nameVerificationCache = new Map<string, Promise<BungieNameVerificationResult>>();
 
@@ -50,8 +76,10 @@ export function verifyBungieName(name: string): Promise<BungieNameVerificationRe
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: normalizedName, verifyOnly: true }),
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data?.error || 'Bungie name lookup failed.');
+    const data = await readBungieEndpointResponse<{ valid?: boolean; displayName?: string | null }>(
+      response,
+      'Bungie name lookup failed.',
+    );
     return { valid: Boolean(data.valid), displayName: data.displayName ?? null };
   })();
 
@@ -111,10 +139,10 @@ export function fetchBungieRaidStats(name: string): Promise<BungieRaidStatsResul
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: normalizedName }),
     });
-    const data = await response.json() as BungieRaidStatsResult;
-    if (!response.ok) {
-      throw new Error((data as BungieRaidStatsResult & { error?: string }).error || 'Bungie raid stats could not be loaded.');
-    }
+    const data = await readBungieEndpointResponse<BungieRaidStatsResult>(
+      response,
+      'Bungie raid stats could not be loaded.',
+    );
     return data;
   })();
   const timeout = new Promise<BungieRaidStatsResult>((_, reject) => {

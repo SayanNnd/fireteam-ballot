@@ -77,6 +77,7 @@ export default async function handler(req: any, res: any) {
       });
     }
   } catch (error: any) {
+    console.error('[api/bungie-raid-stats] Bungie request failed:', error);
     return res.status(502).json({ error: error?.message || 'Bungie API request failed.' });
   }
 }
