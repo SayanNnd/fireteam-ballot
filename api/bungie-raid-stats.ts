@@ -1,4 +1,4 @@
-import { fetchBungieRaidClearCounts, lookupBungieName } from '../src/lib/bungie-shared';
+import { fetchBungieRaidClearCounts, lookupBungieName } from '../src/lib/bungie-shared.js';
 
 const BUNGIE_PLATFORM = 'https://www.bungie.net/Platform';
 
@@ -15,19 +15,17 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    const name = typeof body?.name === 'string' ? body.name.trim() : '';
-    const identity = await lookupBungieName(name, async (path, init = {}) => {
-      const response = await fetch(`${BUNGIE_PLATFORM}${path}`, {
-        ...init,
-        headers: {
-          'X-API-Key': apiKey,
-          ...(init.headers ?? {}),
-        },
-      });
+    const requestBungie = async (path: string, init: RequestInit = {}) => {
+      const headers = new Headers(init.headers);
+      headers.set('X-API-Key', apiKey);
+      const response = await fetch(`${BUNGIE_PLATFORM}${path}`, { ...init, headers });
       if (!response.ok) throw new Error(`Bungie API returned ${response.status}.`);
       return response.json();
-    });
+    };
+
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const name = typeof body?.name === 'string' ? body.name.trim() : '';
+    const identity = await lookupBungieName(name, requestBungie);
 
     if (!identity.valid || !identity.membership) {
       return res.status(200).json({
@@ -48,17 +46,7 @@ export default async function handler(req: any, res: any) {
     }
 
     try {
-      const raidClearsByRaid = await fetchBungieRaidClearCounts(identity.membership, async (path, init = {}) => {
-        const response = await fetch(`${BUNGIE_PLATFORM}${path}`, {
-          ...init,
-          headers: {
-            'X-API-Key': apiKey,
-            ...(init.headers ?? {}),
-          },
-        });
-        if (!response.ok) throw new Error(`Bungie API returned ${response.status}.`);
-        return response.json();
-      });
+      const raidClearsByRaid = await fetchBungieRaidClearCounts(identity.membership, requestBungie);
 
       return res.status(200).json({
         valid: true,

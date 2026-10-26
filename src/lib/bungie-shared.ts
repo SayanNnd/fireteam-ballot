@@ -1,4 +1,4 @@
-import raids from '../data/raids';
+import raids from '../data/raids.js';
 
 export const BUNGIE_RAID_MILESTONES: Record<string, string | string[]> = {
   '3181387331': 'last-wish',
