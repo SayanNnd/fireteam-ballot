@@ -1,3 +1,4 @@
+import { env } from 'node:process';
 import { fetchBungieRaidClearCounts, lookupBungieName } from '../src/lib/bungie-shared.js';
 
 const BUNGIE_PLATFORM = 'https://www.bungie.net/Platform';
@@ -9,7 +10,7 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: 'Method not allowed.' });
   }
 
-  const apiKey = process.env.BUNGIE_API_KEY || process.env.VITE_BUNGIE_API_KEY;
+  const apiKey = env.BUNGIE_API_KEY || env.VITE_BUNGIE_API_KEY;
   if (!apiKey) {
     return res.status(503).json({ error: 'Bungie API key is not configured.' });
   }
