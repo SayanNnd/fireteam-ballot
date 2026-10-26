@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { verifyBungieName } from '../lib/bungie';
 
 interface LandingViewProps {
   onCreateRoom: (hostName: string) => Promise<void>;
@@ -6,6 +7,98 @@ interface LandingViewProps {
   isLoading: boolean;
   error: string | null;
 }
+
+type BungieNameStatus = 'idle' | 'checking' | 'valid' | 'invalid' | 'unavailable';
+
+const isBungieName = (name: string) => /^.{1,20}#\d{4}$/u.test(name.trim());
+
+function useBungieNameValidation(name: string) {
+  const [status, setStatus] = useState<BungieNameStatus>('idle');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const currentNameRef = useRef(name.trim());
+  const requestRef = useRef<{ name: string; promise: Promise<void> } | null>(null);
+  currentNameRef.current = name.trim();
+
+  const verify = useCallback((candidate: string) => {
+    const cleanName = candidate.trim();
+    if (!isBungieName(cleanName)) return Promise.resolve();
+    if (requestRef.current?.name === cleanName) return requestRef.current.promise;
+
+    setStatus('checking');
+    setErrorMessage(null);
+    let promise: Promise<void>;
+    promise = verifyBungieName(cleanName)
+      .then((result) => {
+        if (currentNameRef.current === cleanName) {
+          setStatus(result.valid ? 'valid' : 'invalid');
+        }
+      })
+      .catch((error: unknown) => {
+        if (currentNameRef.current === cleanName) {
+          setStatus('unavailable');
+          setErrorMessage(error instanceof Error ? error.message.slice(0, 100) : 'Unknown request error.');
+        }
+      })
+      .finally(() => {
+        if (requestRef.current?.promise === promise) requestRef.current = null;
+      });
+    requestRef.current = { name: cleanName, promise };
+    return promise;
+  }, []);
+
+  useEffect(() => {
+    const candidate = name.trim();
+    if (!isBungieName(candidate)) {
+      setStatus('idle');
+      setErrorMessage(null);
+      requestRef.current = null;
+      return;
+    }
+
+    setStatus('checking');
+    const timer = window.setTimeout(() => {
+      void verify(candidate);
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [name, verify]);
+
+  const verifyBeforeSubmit = useCallback(() => verify(name), [name, verify]);
+  return { status, errorMessage, verifyBeforeSubmit };
+}
+
+const BungieNameStatusText: React.FC<{
+  name: string;
+  status: BungieNameStatus;
+  errorMessage: string | null;
+}> = ({ name, status, errorMessage }) => {
+  let message: string | null = null;
+  let color = 'var(--text-muted)';
+
+  if (isBungieName(name)) {
+    if (status === 'checking') message = 'Checking Bungie Name…';
+    if (status === 'valid') {
+      message = 'Bungie Name found.';
+      color = 'var(--gold)';
+    }
+    if (status === 'invalid') {
+      message = 'No matching Bungie Name found.';
+      color = '#fda4af';
+    }
+    if (status === 'unavailable') {
+      message = errorMessage
+        ? `Bungie lookup failed: ${errorMessage}`
+        : 'Bungie lookup is unavailable right now.';
+    }
+  }
+
+  if (!message) return null;
+
+  return (
+    <p aria-live="polite" style={{ color, fontSize: '0.78rem', lineHeight: 1.45, marginTop: '-8px', marginBottom: '16px' }}>
+      {message}
+    </p>
+  );
+};
 
 export const LandingView: React.FC<LandingViewProps> = ({
   onCreateRoom,
@@ -21,16 +114,20 @@ export const LandingView: React.FC<LandingViewProps> = ({
     const codeParam = params.get('room');
     return codeParam ? codeParam.toUpperCase().slice(0, 4) : '';
   });
+  const hostNameValidation = useBungieNameValidation(hostName);
+  const joinNameValidation = useBungieNameValidation(joinName);
 
-  const handleCreateSubmit = (e: React.FormEvent) => {
+  const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!hostName.trim()) return;
+    await hostNameValidation.verifyBeforeSubmit();
     onCreateRoom(hostName.trim());
   };
 
-  const handleJoinSubmit = (e: React.FormEvent) => {
+  const handleJoinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!joinName.trim() || roomCode.trim().length !== 4) return;
+    await joinNameValidation.verifyBeforeSubmit();
     onJoinRoom(roomCode.trim().toUpperCase(), joinName.trim());
   };
 
@@ -51,9 +148,6 @@ export const LandingView: React.FC<LandingViewProps> = ({
       }}
     >
       <div style={{ textAlign: 'center', maxWidth: '680px' }}>
-        <div className="label-caps gold-label" style={{ fontSize: '0.78rem', letterSpacing: '0.22em', marginBottom: '14px' }}>
-          DESTINY 2 · FIRETEAM CONSENSUS PROTOCOL
-        </div>
         <h1 style={{
           fontFamily: 'var(--font-display)',
           fontSize: 'clamp(3rem, 7vw, 5rem)',
@@ -121,19 +215,24 @@ export const LandingView: React.FC<LandingViewProps> = ({
               />
             </div>
             <div className="input-group">
-              <label className="label-caps" htmlFor="join-name">GUARDIAN IDENTIFIER (NAME)</label>
+              <label className="label-caps" htmlFor="join-name">GUARDIAN NAME / BUNGIE NAME</label>
               <input
                 id="join-name"
                 className="input-field"
                 type="text"
-                maxLength={20}
-                placeholder="e.g. Saint-14"
+                maxLength={25}
+                placeholder="e.g. Saint-14#1234"
                 value={joinName}
                 onChange={(e) => setJoinName(e.target.value)}
                 disabled={isLoading}
                 required
               />
             </div>
+            <BungieNameStatusText
+              name={joinName}
+              status={joinNameValidation.status}
+              errorMessage={joinNameValidation.errorMessage}
+            />
             <button
               type="submit"
               className="btn btn-primary btn-large"
@@ -157,19 +256,24 @@ export const LandingView: React.FC<LandingViewProps> = ({
           </p>
           <form onSubmit={handleCreateSubmit}>
             <div className="input-group">
-              <label className="label-caps" htmlFor="host-name">FIRETEAM LEADER NAME</label>
+              <label className="label-caps" htmlFor="host-name">FIRETEAM LEADER / BUNGIE NAME</label>
               <input
                 id="host-name"
                 className="input-field"
                 type="text"
-                maxLength={20}
-                placeholder="e.g. Zavala"
+                maxLength={25}
+                placeholder="e.g. Zavala#1234"
                 value={hostName}
                 onChange={(e) => setHostName(e.target.value)}
                 disabled={isLoading}
                 required
               />
             </div>
+            <BungieNameStatusText
+              name={hostName}
+              status={hostNameValidation.status}
+              errorMessage={hostNameValidation.errorMessage}
+            />
             <button
               type="submit"
               className="btn btn-large"

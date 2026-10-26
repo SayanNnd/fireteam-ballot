@@ -1,7 +1,7 @@
 export default async function handler(_req: any, res: any) {
   res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=300');
 
-  const apiKey = process.env.VITE_BUNGIE_API_KEY || process.env.BUNGIE_API_KEY;
+  const apiKey = process.env.BUNGIE_API_KEY || process.env.VITE_BUNGIE_API_KEY;
   if (!apiKey) {
     return res.status(200).json({ Response: {} });
   }

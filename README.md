@@ -7,4 +7,8 @@ A realtime web app for Destiny 2 fireteams to resolve "which raid tonight?". Gua
 - **Backend**: Supabase free tier (PostgreSQL + Realtime WebSocket subscriptions)
 - **Hosting**: Vercel
 
+## Bungie API
+
+Set `BUNGIE_API_KEY` in Vercel to enable Bungie Name checks and lifetime raid-clear counts in the voting screen. For local development, set `VITE_BUNGIE_API_KEY` in `.env.local`; the Vite proxy uses it for Bungie requests.
+
 ---

@@ -149,15 +149,6 @@ h4 {
   line-height: 1.1;
 }
 
-.brand-protocol {
-  color: var(--gold);
-  font-size: 0.7rem;
-  font-family: var(--font-condensed);
-  letter-spacing: 0.1em;
-  font-weight: 600;
-  margin-top: 2px;
-}
-
 .header-actions {
   display: flex;
   align-items: center;
@@ -643,7 +634,7 @@ h4 {
 
 .destination-card-top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   flex-wrap: nowrap;
   row-gap: 14px;
@@ -651,11 +642,36 @@ h4 {
 
 .destination-title-area {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: flex-start;
   gap: 14px;
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.destination-title-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.destination-title-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.destination-clear-line {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  width: 100%;
 }
 
 .destination-num {
@@ -674,11 +690,33 @@ h4 {
   font-weight: 700;
   letter-spacing: 0.06em;
   flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--text-main);
   margin: 0;
   text-transform: uppercase;
   text-shadow: 0 2px 6px rgba(0, 0, 0, 0.9);
   white-space: nowrap;
+}
+
+.personal-clear-count {
+  flex: 0 0 auto;
+  color: var(--text-main);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  background: rgba(8, 12, 18, 0.82);
+  border-radius: var(--radius);
+  padding: 5px 8px;
+  font-family: var(--font-body);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.personal-clear-count.is-loading {
+  color: var(--text-main);
+  border-color: rgba(255, 255, 255, 0.35);
 }
 
 .destination-tag-badge {
@@ -1853,3 +1891,4 @@ h4 {
   background-position: center;
   background-repeat: no-repeat;
 }
+

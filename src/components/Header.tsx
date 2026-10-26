@@ -57,7 +57,6 @@ export const Header: React.FC<HeaderProps> = ({ roomCode, onLeave }) => {
         </div>
         <div>
           <h1 className="brand-title">FIRETEAM BALLOT</h1>
-          <div className="brand-protocol">Destiny 2 Fireteam Consensus</div>
         </div>
       </div>
 

@@ -15,6 +15,13 @@ export default defineConfig({
         target: 'https://www.bungie.net',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/bungie-proxy/, ''),
+        timeout: 25000,
+        proxyTimeout: 25000,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyRequest) => {
+            proxyRequest.removeHeader('origin');
+          });
+        },
       },
     },
   },

@@ -214,8 +214,8 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
             <div className="label-caps" style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '6px' }}>STATUS</div>
             <div style={{ fontFamily: 'var(--font-condensed)', fontSize: '1.15rem', color: 'var(--text-main)', letterSpacing: '0.04em' }}>
               {isHost
-                ? <><span style={{ color: 'var(--gold)' }}>Fireteam assembled.</span> Ready to initiate private voting phase.</>
-                : 'Awaiting Fireteam Leader to initiate voting...'}
+                ? 'Ready to start voting.'
+                : 'Waiting for the host to start voting.'}
             </div>
           </div>
           {isHost ? (

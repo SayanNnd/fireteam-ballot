@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 
 import type { Room, Player } from '../types';
 import raids from '../data/raids';
-import { fetchLiveFeaturedRaidIds, getFeaturedRaidIds } from '../lib/bungie';
+import { fetchBungieRaidStats, fetchLiveFeaturedRaidIds, getFeaturedRaidIds } from '../lib/bungie';
 import { supabase } from '../lib/supabase';
 import { getRecentRaidIds } from '../lib/pick';
 import { RecentClearsModal } from './RecentClearsModal';
@@ -19,6 +19,11 @@ interface VotingViewProps {
   onDisbandRoom?: () => Promise<void>;
   isLoading: boolean;
 }
+
+type RaidStatsView = {
+  status: 'loading' | 'ready' | 'invalid' | 'unavailable';
+  raidClearsByRaid: Record<string, number | null> | null;
+};
 
 // Destiny 2 Guardian class geometric emblem SVGs
 const GuardianEmblem: React.FC<{ index: number; isHost?: boolean }> = ({ index, isHost }) => {
@@ -75,6 +80,7 @@ export const VotingView: React.FC<VotingViewProps> = ({
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [showRecentClearsModal, setShowRecentClearsModal] = useState(false);
   const [history, setHistory] = useState<{ raid_id: string; picked_at: string }[]>([]);
+  const [raidStats, setRaidStats] = useState<RaidStatsView | null>(null);
   const recentClearsPanelRef = useRef<HTMLDivElement>(null);
   const recentClearsButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -111,6 +117,28 @@ export const VotingView: React.FC<VotingViewProps> = ({
   useEffect(() => {
     loadHistory();
   }, [loadHistory]);
+
+  useEffect(() => {
+    let isMounted = true;
+    setRaidStats({ status: 'loading', raidClearsByRaid: null });
+
+    fetchBungieRaidStats(currentPlayer.name)
+      .then((result) => {
+        if (isMounted) {
+          setRaidStats({
+            status: result.valid ? 'ready' : 'invalid',
+            raidClearsByRaid: result.raidClearsByRaid,
+          });
+        }
+      })
+      .catch(() => {
+        if (isMounted) setRaidStats({ status: 'unavailable', raidClearsByRaid: null });
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentPlayer.name]);
 
   const recentTwoRaidIds = new Set(getRecentRaidIds(history, 2));
 
@@ -333,6 +361,9 @@ export const VotingView: React.FC<VotingViewProps> = ({
               const rawBadge = raid.badge === 'PINNACLE' ? 'FEATURED' : raid.badge;
               const badgeLabel = (isLiveFeatured ? 'FEATURED' : null) || rawBadge;
               const isRecent = recentTwoRaidIds.has(raid.id.toLowerCase());
+              const myRaidClears = raidStats?.status === 'ready'
+                ? raidStats.raidClearsByRaid?.[raid.id]
+                : null;
 
               return (
                 <div
@@ -347,10 +378,24 @@ export const VotingView: React.FC<VotingViewProps> = ({
                     <div className="destination-card-top">
                       <div className="destination-title-area">
                         <span className="destination-num">{padIndex}</span>
-                        <h3 className="destination-name">{raid.name}</h3>
-                        {badgeLabel && (
-                          <span className="destination-tag-badge">{badgeLabel}</span>
-                        )}
+                        <div className="destination-title-content">
+                          <div className="destination-title-line">
+                            <h3 className="destination-name">{raid.name}</h3>
+                            {badgeLabel && (
+                              <span className="destination-tag-badge">{badgeLabel}</span>
+                            )}
+                          </div>
+                          <div className="destination-clear-line">
+                            {raidStats?.status === 'loading' && (
+                              <span className="personal-clear-count is-loading" aria-label="Checking your raid clears">CHECKING YOUR CLEARS</span>
+                            )}
+                            {typeof myRaidClears === 'number' && (
+                              <span className="personal-clear-count" title="Only visible to you">
+                                YOUR CLEARS: {myRaidClears.toLocaleString()}
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       </div>
 
                       {/* Score Selector (1-5) stays on the top right */}
@@ -418,7 +463,7 @@ export const VotingView: React.FC<VotingViewProps> = ({
           </div>
         </section>
 
-        {/* ================= COLUMN 3: PROTOCOL & LEADER CONTROLS ================= */}
+        {/* ================= COLUMN 3: VOTING & LEADER CONTROLS ================= */}
         <aside className="voting-col-side">
           {/* Top Panel: Lock-in Protocol */}
           <div className="side-panel-card">
@@ -524,8 +569,8 @@ export const VotingView: React.FC<VotingViewProps> = ({
         type="button"
         className="floating-help-btn"
         onClick={() => setShowHelpModal(true)}
-        title="Protocol Guidelines & Instructions"
-        aria-label="Ballot Protocol Help"
+        title="Voting instructions"
+        aria-label="Voting help"
       >
         ?
       </button>
@@ -536,8 +581,8 @@ export const VotingView: React.FC<VotingViewProps> = ({
           <div className="protocol-modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="panel-header">
               <div>
-                <div className="label-caps gold-label">BALLOT PROTOCOL SPECIFICATION</div>
-                <h2 style={{ fontSize: '1.3rem' }}>HOW FIRETEAM BALLOT WORKS</h2>
+                <div className="label-caps gold-label">VOTING HELP</div>
+                <h2 style={{ fontSize: '1.3rem' }}>HOW VOTING WORKS</h2>
               </div>
               <button
                 type="button"
@@ -557,16 +602,16 @@ export const VotingView: React.FC<VotingViewProps> = ({
               </div>
 
               <div>
-                <strong style={{ color: 'var(--gold)' }}>2. TACTICAL VETO (1 MAX):</strong>
+                <strong style={{ color: 'var(--gold)' }}>2. VETO (1 MAX):</strong>
                 <p style={{ color: 'var(--text-muted)' }}>
-                  Each Guardian may assign up to one veto. Vetoed raids are immediately stricken from the candidate pool and cannot be chosen under any circumstance.
+                  Each person may assign one veto. A vetoed raid cannot be selected.
                 </p>
               </div>
 
               <div>
                 <strong style={{ color: 'var(--gold)' }}>3. HIGHEST VOTE PICK:</strong>
                 <p style={{ color: 'var(--text-muted)' }}>
-                  Once ballots are locked, the algorithm tallies all fireteam preference points. The eligible destination with the highest total vote is selected. If multiple destinations tie for highest vote, the winner is chosen from among the tied leaders.
+                  Once everyone locks in, the raid with the highest total score is selected. A tie is settled at random among the tied raids.
                 </p>
               </div>
             </div>
@@ -577,7 +622,7 @@ export const VotingView: React.FC<VotingViewProps> = ({
                 className="btn btn-primary btn-sm"
                 onClick={() => setShowHelpModal(false)}
               >
-                ACKNOWLEDGED
+                DONE
               </button>
             </div>
           </div>

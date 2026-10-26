@@ -1,4 +1,12 @@
 import raids, { type Raid } from '../data/raids';
+import {
+  BUNGIE_RAID_MILESTONES,
+  fetchBungieRaidClearCounts,
+  lookupBungieName,
+  type BungieNameLookupResult,
+} from './bungie-shared';
+
+export { BUNGIE_RAID_MILESTONES } from './bungie-shared';
 
 export interface FeaturedRaidsInfo {
   featuredRaids: Raid[];
@@ -6,26 +14,163 @@ export interface FeaturedRaidsInfo {
   source: 'bungie_api' | 'none';
 }
 
-/**
- * Official Bungie Destiny 2 milestone hashes mapped to raid IDs.
- * Bungie tracks each raid's weekly state via these milestones.
- */
-export const BUNGIE_RAID_MILESTONES: Record<string, string | string[]> = {
-  '3181387331': 'last-wish',
-  '2712317338': 'garden-of-salvation',
-  '541780856': 'deep-stone-crypt',
-  '1888320892': 'vault-of-glass',
-  '2136320298': 'vow-of-the-disciple',
-  '292102995': 'kings-fall',
-  '3699252268': 'root-of-nightmares',
-  '540415767': 'crotas-end',
-  '4196566271': 'salvations-edge',
-  '3022338715': ['the-desert-perpetual', 'epic-desert-perpetual'],
-};
+export interface BungieRaidStatsResult {
+  valid: boolean;
+  displayName: string | null;
+  raidClearsByRaid: Record<string, number | null> | null;
+  statsAvailable?: boolean;
+}
+
+export type BungieNameVerificationResult = Pick<BungieNameLookupResult, 'valid' | 'displayName'>;
+
+const raidStatsCache = new Map<string, Promise<BungieRaidStatsResult>>();
+const nameVerificationCache = new Map<string, Promise<BungieNameVerificationResult>>();
+
+/** Check the exact Bungie Name without requiring public activity stats to be available. */
+export function verifyBungieName(name: string): Promise<BungieNameVerificationResult> {
+  const normalizedName = name.trim();
+  const cacheKey = normalizedName.toLocaleLowerCase();
+  const cached = nameVerificationCache.get(cacheKey);
+  if (cached) return cached;
+
+  const lookup = (async () => {
+    if (import.meta.env.DEV) {
+      const apiKey = import.meta.env.VITE_BUNGIE_API_KEY;
+      if (!apiKey) throw new Error('Bungie API key is not configured.');
+      const result = await lookupBungieName(normalizedName, (path, init = {}) => requestLocalBungieApi(
+        path,
+        apiKey,
+        init,
+      ));
+      return { valid: result.valid, displayName: result.displayName };
+    }
+
+    const response = await fetch('/api/bungie-raid-stats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: normalizedName, verifyOnly: true }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.error || 'Bungie name lookup failed.');
+    return { valid: Boolean(data.valid), displayName: data.displayName ?? null };
+  })();
+
+  const request = lookup.catch((error: unknown) => {
+    nameVerificationCache.delete(cacheKey);
+    throw error;
+  });
+  nameVerificationCache.set(cacheKey, request);
+  return request;
+}
+
+/** Resolve the exact Bungie Name and load its per-raid all-time clears. */
+export function fetchBungieRaidStats(name: string): Promise<BungieRaidStatsResult> {
+  const normalizedName = name.trim();
+  const cacheKey = normalizedName.toLocaleLowerCase();
+  const cached = raidStatsCache.get(cacheKey);
+  if (cached) return cached;
+
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const lookup = (async () => {
+    if (import.meta.env.DEV) {
+      const apiKey = import.meta.env.VITE_BUNGIE_API_KEY;
+      if (!apiKey) throw new Error('Bungie API key is not configured.');
+      const identity = await lookupBungieName(normalizedName, (path, init = {}) => requestLocalBungieApi(
+        path,
+        apiKey,
+        init,
+      ));
+      if (!identity.valid || !identity.membership) {
+        return { valid: false, displayName: null, raidClearsByRaid: null, statsAvailable: false };
+      }
+
+      try {
+        const raidClearsByRaid = await fetchBungieRaidClearCounts(identity.membership, (path, init = {}) => requestLocalBungieApi(
+          path,
+          apiKey,
+          init,
+        ));
+        return {
+          valid: true,
+          displayName: identity.displayName,
+          raidClearsByRaid,
+          statsAvailable: hasRaidClearCounts(raidClearsByRaid),
+        };
+      } catch {
+        return {
+          valid: true,
+          displayName: identity.displayName,
+          raidClearsByRaid: null,
+          statsAvailable: false,
+        };
+      }
+    }
+
+    const response = await fetch('/api/bungie-raid-stats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: normalizedName }),
+    });
+    const data = await response.json() as BungieRaidStatsResult;
+    if (!response.ok) {
+      throw new Error((data as BungieRaidStatsResult & { error?: string }).error || 'Bungie raid stats could not be loaded.');
+    }
+    return data;
+  })();
+  const timeout = new Promise<BungieRaidStatsResult>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error('Bungie raid stats request timed out.')), 40000);
+  });
+  const request = Promise.race([lookup, timeout])
+    .catch((error: unknown) => {
+      raidStatsCache.delete(cacheKey);
+      throw error;
+    })
+    .finally(() => {
+      if (timeoutId) clearTimeout(timeoutId);
+    });
+
+  raidStatsCache.set(cacheKey, request);
+  return request;
+}
+
+async function requestBungieApi(path: string, apiKey: string, init: RequestInit = {}) {
+  const response = await fetch(path, {
+    ...init,
+    headers: {
+      'X-API-Key': apiKey,
+      ...(init.headers ?? {}),
+    },
+  });
+  if (!response.ok) throw new Error(`Bungie API returned ${response.status}.`);
+  return response.json();
+}
+
+async function requestLocalBungieApi(path: string, apiKey: string, init: RequestInit = {}) {
+  let proxyError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await requestBungieApi(`/bungie-proxy/Platform${path}`, apiKey, {
+        ...init,
+        signal: AbortSignal.timeout(20000),
+      });
+    } catch (error) {
+      proxyError = error;
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+  }
+
+  const message = proxyError instanceof Error ? proxyError.message : 'Unknown request error.';
+  throw new Error(`Bungie local proxy failed: ${message}`);
+}
+
+function hasRaidClearCounts(counts: Record<string, number | null> | null): boolean {
+  return counts !== null && Object.values(counts).some((count) => typeof count === 'number');
+}
 
 // In-memory cache for live Bungie API results
 let cachedFeaturedIds: Set<string> | null = null;
 let lastFetchTime = 0;
+let featuredApiAvailable = false;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
@@ -70,18 +215,19 @@ export function getNextWeeklyReset(): string {
 }
 
 /**
- * Fetches all active featured raids directly through the live Bungie API.
+ * Fetches all active featured raids through the live Bungie API.
  * A raid is featured if and only if its milestone in the Bungie API has active challenge objectives
  * (e.g. Weekly Pinnacle challenge).
  *
- * If no Bungie API key is provided in .env.local (VITE_BUNGIE_API_KEY),
- * it returns an empty set so no unverified featured tags are shown.
+ * Local development uses VITE_BUNGIE_API_KEY through the Vite proxy. Production
+ * calls the server endpoint so the Bungie key stays out of the browser bundle.
  */
 export async function fetchLiveFeaturedRaidIds(): Promise<Set<string>> {
-  const apiKey = import.meta.env.VITE_BUNGIE_API_KEY;
+  const apiKey = import.meta.env.DEV ? import.meta.env.VITE_BUNGIE_API_KEY : undefined;
 
-  // Strictly require API key: if no key is configured, do not show any featured badges!
-  if (!apiKey || !apiKey.trim()) {
+  // Local development calls Bungie through the Vite proxy and needs its local key.
+  if (import.meta.env.DEV && (!apiKey || !apiKey.trim())) {
+    featuredApiAvailable = false;
     cachedFeaturedIds = new Set<string>();
     return cachedFeaturedIds;
   }
@@ -91,18 +237,18 @@ export async function fetchLiveFeaturedRaidIds(): Promise<Set<string>> {
     return cachedFeaturedIds;
   }
 
-  const urls = [
-    typeof window !== 'undefined' ? '/api/bungie-milestones' : null,
-    typeof window !== 'undefined' && window.location.port ? '/bungie-proxy/Platform/Destiny2/Milestones/' : null,
-    'https://www.bungie.net/Platform/Destiny2/Milestones/',
-  ].filter(Boolean) as string[];
+  const urls = import.meta.env.DEV
+    ? [
+        '/api/bungie-milestones',
+        '/bungie-proxy/Platform/Destiny2/Milestones/',
+        'https://www.bungie.net/Platform/Destiny2/Milestones/',
+      ]
+    : ['/api/bungie-milestones'];
 
   for (const url of urls) {
     try {
       const res = await fetch(url, {
-        headers: {
-          'X-API-Key': apiKey,
-        },
+        headers: apiKey ? { 'X-API-Key': apiKey } : undefined,
       });
 
       if (res.ok) {
@@ -110,6 +256,7 @@ export async function fetchLiveFeaturedRaidIds(): Promise<Set<string>> {
         if (data && data.Response) {
           const liveFeatured = parseBungieMilestones(data.Response);
           cachedFeaturedIds = liveFeatured;
+          featuredApiAvailable = true;
           lastFetchTime = Date.now();
           return liveFeatured;
         }
@@ -119,6 +266,7 @@ export async function fetchLiveFeaturedRaidIds(): Promise<Set<string>> {
     }
   }
 
+  featuredApiAvailable = false;
   cachedFeaturedIds = new Set<string>();
   return cachedFeaturedIds;
 }
@@ -142,6 +290,6 @@ export async function fetchFeaturedRaids(): Promise<FeaturedRaidsInfo> {
   return {
     featuredRaids,
     resetDate: nextReset,
-    source: import.meta.env.VITE_BUNGIE_API_KEY ? 'bungie_api' : 'none',
+    source: featuredApiAvailable ? 'bungie_api' : 'none',
   };
 }
