@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 
-import type { Room, Player } from '../types';
-import raids from '../data/raids';
-import { fetchBungieRaidStats, fetchLiveFeaturedRaidIds, getFeaturedRaidIds } from '../lib/bungie';
-import { supabase } from '../lib/supabase';
-import { getRecentRaidIds } from '../lib/pick';
-import { RecentClearsModal } from './RecentClearsModal';
+import type { Room, Player } from '../../types';
+import raids from '../../../../shared/data/raids';
+import { fetchBungieRaidStats, fetchLiveFeaturedRaidIds, getFeaturedRaidIds } from '../../lib/bungie';
+import { supabase } from '../../lib/supabase';
+import { getRecentRaidIds } from '../../lib/pick';
+import { RecentClearsModal } from '../results/RecentClearsModal';
 
 interface VotingViewProps {
   room: Room;

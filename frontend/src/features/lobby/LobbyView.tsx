@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { Room, Player } from '../types';
+import type { Room, Player } from '../../types';
 
 interface LobbyViewProps {
   room: Room;

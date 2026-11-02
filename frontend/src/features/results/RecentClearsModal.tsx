@@ -1,7 +1,7 @@
 import React from 'react';
-import raids from '../data/raids';
-import { supabase } from '../lib/supabase';
-import { getRecentRaidIds } from '../lib/pick';
+import raids from '../../../../shared/data/raids';
+import { supabase } from '../../lib/supabase';
+import { getRecentRaidIds } from '../../lib/pick';
 
 interface RecentClearsModalProps {
   isOpen: boolean;

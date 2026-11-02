@@ -1,15 +1,16 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
 import { generateRoomCode } from './lib/codeGen';
 import type { Room, Player } from './types';
 import { Header } from './components/Header';
 import { SetupBanner } from './components/SetupBanner';
-import { LandingView } from './components/LandingView';
-import { LobbyView } from './components/LobbyView';
-import { VotingView } from './components/VotingView';
-import { RevealedView } from './components/RevealedView';
 import { fetchLiveFeaturedRaidIds } from './lib/bungie';
+
+const LandingView = lazy(() => import('./features/landing/LandingView').then((module) => ({ default: module.LandingView })));
+const LobbyView = lazy(() => import('./features/lobby/LobbyView').then((module) => ({ default: module.LobbyView })));
+const VotingView = lazy(() => import('./features/voting/VotingView').then((module) => ({ default: module.VotingView })));
+const RevealedView = lazy(() => import('./features/results/RevealedView').then((module) => ({ default: module.RevealedView })));
 
 const STORAGE_KEY = 'fireteam_ballot_session';
 
@@ -1098,86 +1099,88 @@ export function App() {
       />
 
       <main style={{ flex: 1 }}>
-        {!isSupabaseConfigured && (
-          <div className="app-inner">
-            <SetupBanner />
-          </div>
-        )}
+        <Suspense fallback={<div className="app-inner" role="status">Loading fireteam view...</div>}>
+          {!isSupabaseConfigured && (
+            <div className="app-inner">
+              <SetupBanner />
+            </div>
+          )}
 
-        {isRestoringSession ? (
-          <div className="app-inner">
-            <div
-              className="panel-card"
-              style={{
-                maxWidth: '460px',
-                margin: '80px auto',
-                textAlign: 'center',
-                borderColor: 'var(--border-strong)',
-              }}
-            >
-              <div className="label-caps" style={{ color: 'var(--gold)', marginBottom: '10px' }}>
-                [SYS] RESTORING FIRETEAM FREQUENCY
+          {isRestoringSession ? (
+            <div className="app-inner">
+              <div
+                className="panel-card"
+                style={{
+                  maxWidth: '460px',
+                  margin: '80px auto',
+                  textAlign: 'center',
+                  borderColor: 'var(--border-strong)',
+                }}
+              >
+                <div className="label-caps" style={{ color: 'var(--gold)', marginBottom: '10px' }}>
+                  [SYS] RESTORING FIRETEAM FREQUENCY
+                </div>
+                <h2 style={{ fontSize: '1.35rem', marginBottom: '8px' }}>RECONNECTING SESSION</h2>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                  Reconnecting to fireteam session...
+                </p>
               </div>
-              <h2 style={{ fontSize: '1.35rem', marginBottom: '8px' }}>RECONNECTING SESSION</h2>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                Reconnecting to fireteam session...
-              </p>
             </div>
-          </div>
-        ) : !room || !currentPlayer ? (
-          /* Full-bleed hero — no app-inner wrapper */
-          <LandingView
-            onCreateRoom={handleCreateRoom}
-            onJoinRoom={handleJoinRoom}
-            isLoading={isLoading}
-            error={error}
-          />
-        ) : room.status === 'lobby' ? (
-          /* Full-bleed hero — no app-inner wrapper */
-          <LobbyView
-            room={room}
-            players={players}
-            currentPlayer={currentPlayer}
-            onlinePlayerIds={onlinePlayerIds}
-            onStartVoting={handleStartVoting}
-            onKickPlayer={handleKickPlayer}
-            onDisbandRoom={handleDisbandRoom}
-            isLoading={isLoading}
-          />
-        ) : room.status === 'voting' ? (
-          <div className="page-bg">
-            <div className="app-inner">
-              <VotingView
-                room={room}
-                players={players}
-                currentPlayer={currentPlayer}
-                onlinePlayerIds={onlinePlayerIds}
-                onLockIn={handleLockIn}
-                onForceAdvance={handleForceAdvance}
-                onReturnToLobby={handleReturnToLobby}
-                onKickPlayer={handleKickPlayer}
-                onDisbandRoom={handleDisbandRoom}
-                isLoading={isLoading}
-              />
+          ) : !room || !currentPlayer ? (
+            /* Full-bleed hero — no app-inner wrapper */
+            <LandingView
+              onCreateRoom={handleCreateRoom}
+              onJoinRoom={handleJoinRoom}
+              isLoading={isLoading}
+              error={error}
+            />
+          ) : room.status === 'lobby' ? (
+            /* Full-bleed hero — no app-inner wrapper */
+            <LobbyView
+              room={room}
+              players={players}
+              currentPlayer={currentPlayer}
+              onlinePlayerIds={onlinePlayerIds}
+              onStartVoting={handleStartVoting}
+              onKickPlayer={handleKickPlayer}
+              onDisbandRoom={handleDisbandRoom}
+              isLoading={isLoading}
+            />
+          ) : room.status === 'voting' ? (
+            <div className="page-bg">
+              <div className="app-inner">
+                <VotingView
+                  room={room}
+                  players={players}
+                  currentPlayer={currentPlayer}
+                  onlinePlayerIds={onlinePlayerIds}
+                  onLockIn={handleLockIn}
+                  onForceAdvance={handleForceAdvance}
+                  onReturnToLobby={handleReturnToLobby}
+                  onKickPlayer={handleKickPlayer}
+                  onDisbandRoom={handleDisbandRoom}
+                  isLoading={isLoading}
+                />
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="page-bg">
-            <div className="app-inner">
-              <RevealedView
-                room={room}
-                players={players}
-                currentPlayer={currentPlayer}
-                onlinePlayerIds={onlinePlayerIds}
-                onResetToVoting={handleResetToVoting}
-                onReturnToLobby={handleReturnToLobby}
-                onDisbandRoom={handleDisbandRoom}
-                onPickDetermined={handlePickDetermined}
-                isLoading={isLoading}
-              />
+          ) : (
+            <div className="page-bg">
+              <div className="app-inner">
+                <RevealedView
+                  room={room}
+                  players={players}
+                  currentPlayer={currentPlayer}
+                  onlinePlayerIds={onlinePlayerIds}
+                  onResetToVoting={handleResetToVoting}
+                  onReturnToLobby={handleReturnToLobby}
+                  onDisbandRoom={handleDisbandRoom}
+                  onPickDetermined={handlePickDetermined}
+                  isLoading={isLoading}
+                />
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </Suspense>
 
       </main>
 

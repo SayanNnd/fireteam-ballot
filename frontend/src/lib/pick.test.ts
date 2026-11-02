@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { pickRaid, calculateRaidWeights } from './pick';
 import { parseBungieMilestones, fetchLiveFeaturedRaidIds } from './bungie';
-import type { Raid } from '../data/raids';
+import type { Raid } from '../../../shared/data/raids';
 
 const mockRaids: Raid[] = [
   { id: 'salvations-edge', name: "Salvation's Edge", tagline: 'Test 1' },

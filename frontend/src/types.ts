@@ -43,4 +43,4 @@ export interface HistoryItem {
   picked_at: string;
 }
 
-export type { Raid } from './data/raids';
+export type { Raid } from '../../shared/data/raids';

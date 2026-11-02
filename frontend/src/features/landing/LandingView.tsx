@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { verifyBungieName } from '../lib/bungie';
+import { verifyBungieName } from '../../lib/bungie';
 
 interface LandingViewProps {
   onCreateRoom: (hostName: string) => Promise<void>;

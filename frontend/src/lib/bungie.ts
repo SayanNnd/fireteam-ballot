@@ -1,12 +1,12 @@
-import raids, { type Raid } from '../data/raids';
+import raids, { type Raid } from '../../../shared/data/raids';
 import {
   BUNGIE_RAID_MILESTONES,
   fetchBungieRaidClearCounts,
   lookupBungieName,
   type BungieNameLookupResult,
-} from './bungie-shared';
+} from '../../../shared/bungie';
 
-export { BUNGIE_RAID_MILESTONES } from './bungie-shared';
+export { BUNGIE_RAID_MILESTONES } from '../../../shared/bungie';
 
 export interface FeaturedRaidsInfo {
   featuredRaids: Raid[];
@@ -51,6 +51,7 @@ async function readBungieEndpointResponse<T>(response: Response, fallbackMessage
 
 const raidStatsCache = new Map<string, Promise<BungieRaidStatsResult>>();
 const nameVerificationCache = new Map<string, Promise<BungieNameVerificationResult>>();
+const useLocalBungieProxy = import.meta.env.DEV && import.meta.env.VITE_BUNGIE_LOCAL_MODE !== 'functions';
 
 /** Check the exact Bungie Name without requiring public activity stats to be available. */
 export function verifyBungieName(name: string): Promise<BungieNameVerificationResult> {
@@ -60,7 +61,7 @@ export function verifyBungieName(name: string): Promise<BungieNameVerificationRe
   if (cached) return cached;
 
   const lookup = (async () => {
-    if (import.meta.env.DEV) {
+    if (useLocalBungieProxy) {
       const apiKey = import.meta.env.VITE_BUNGIE_API_KEY;
       if (!apiKey) throw new Error('Bungie API key is not configured.');
       const result = await lookupBungieName(normalizedName, (path, init = {}) => requestLocalBungieApi(
@@ -100,7 +101,7 @@ export function fetchBungieRaidStats(name: string): Promise<BungieRaidStatsResul
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const lookup = (async () => {
-    if (import.meta.env.DEV) {
+    if (useLocalBungieProxy) {
       const apiKey = import.meta.env.VITE_BUNGIE_API_KEY;
       if (!apiKey) throw new Error('Bungie API key is not configured.');
       const identity = await lookupBungieName(normalizedName, (path, init = {}) => requestLocalBungieApi(
@@ -251,10 +252,10 @@ export function getNextWeeklyReset(): string {
  * calls the server endpoint so the Bungie key stays out of the browser bundle.
  */
 export async function fetchLiveFeaturedRaidIds(): Promise<Set<string>> {
-  const apiKey = import.meta.env.DEV ? import.meta.env.VITE_BUNGIE_API_KEY : undefined;
+  const apiKey = useLocalBungieProxy ? import.meta.env.VITE_BUNGIE_API_KEY : undefined;
 
   // Local development calls Bungie through the Vite proxy and needs its local key.
-  if (import.meta.env.DEV && (!apiKey || !apiKey.trim())) {
+  if (useLocalBungieProxy && (!apiKey || !apiKey.trim())) {
     featuredApiAvailable = false;
     cachedFeaturedIds = new Set<string>();
     return cachedFeaturedIds;
@@ -265,7 +266,7 @@ export async function fetchLiveFeaturedRaidIds(): Promise<Set<string>> {
     return cachedFeaturedIds;
   }
 
-  const urls = import.meta.env.DEV
+  const urls = useLocalBungieProxy
     ? [
         '/api/bungie-milestones',
         '/bungie-proxy/Platform/Destiny2/Milestones/',

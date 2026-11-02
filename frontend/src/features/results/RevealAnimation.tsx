@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import type { Raid } from '../data/raids';
+import type { Raid } from '../../../../shared/data/raids';
 
 export interface RevealAnimationProps {
   eligibleRaids: Raid[];

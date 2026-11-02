@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
-import type { Room, Player } from '../types';
-import { supabase } from '../lib/supabase';
-import raids from '../data/raids';
-import { pickRaid, calculateRaidWeights, type VoteInput, type VetoInput, type HistoryInput } from '../lib/pick';
+import type { Room, Player } from '../../types';
+import { supabase } from '../../lib/supabase';
+import raids from '../../../../shared/data/raids';
+import { pickRaid, calculateRaidWeights, type VoteInput, type VetoInput, type HistoryInput } from '../../lib/pick';
 import { RevealAnimation } from './RevealAnimation';
 import { RecentClearsModal } from './RecentClearsModal';
 

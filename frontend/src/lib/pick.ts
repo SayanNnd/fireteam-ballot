@@ -1,5 +1,5 @@
-import type { Raid } from '../data/raids';
-import defaultRaids from '../data/raids';
+import type { Raid } from '../../../shared/data/raids';
+import defaultRaids from '../../../shared/data/raids';
 
 export interface VoteInput {
   raid_id: string;
